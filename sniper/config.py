@@ -31,6 +31,7 @@ class Settings:
     year_from: int = 2013
     year_to: int = 2020
     only_rline: bool = os.getenv("ONLY_RLINE", "0") == "1"
+    import_enabled: bool = os.getenv("IMPORT", "1") == "1"     # AutoScout24 (auta z zagranicy)
 
     # Częstotliwość (sekundy)
     poll_interval: int = int(os.getenv("POLL_INTERVAL", "240"))

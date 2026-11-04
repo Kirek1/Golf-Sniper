@@ -127,6 +127,7 @@ def parse_detail(html: str, l: Listing) -> Listing:
 
 class OtomotoScraper:
     name = "otomoto"
+    sniper_pages, market_pages = 2, 5
 
     def __init__(self, settings: Settings):
         self.s = settings

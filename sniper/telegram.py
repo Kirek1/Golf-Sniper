@@ -1,4 +1,4 @@
-"""Bot na Telegramie: alerty z przyciskami + komendy do zmiany ustawień."""
+"""Bot na Telegramie: alerty z przyciskami ⭐/🙈 i kilka prostych komend."""
 from __future__ import annotations
 
 import html
@@ -17,15 +17,44 @@ log = logging.getLogger("sniper.telegram")
 
 TIER_HEAD = {"perelka": "💎 PEREŁKA", "okazja": "🔥 Okazja", "raport": "👀 Do obejrzenia"}
 
-HELP = """<b>Golf 7 Sniper</b> – komendy:
-/status – co się dzieje, ile ofert w bazie
+SOURCES = {"otomoto": "OtoMoto", "olx": "OLX", "autoplac": "Autoplac", "sprzedajemy": "Sprzedajemy",
+           "autoscout24": "AutoScout24 (import)"}
+
+COMMANDS = """/start – ta wiadomość
+/status – czy bot działa, ile ofert w bazie
 /raport – najlepsze oferty z ostatnich 24 h
 /ulubione – oferty oznaczone ⭐
-/budzet 40000 – maksymalna cena
-/przebieg 180000 – maksymalny przebieg
-/tylko_rline on|off – tylko R-Line
-/pauza i /wznow – wstrzymanie alertów
-/ustawienia – aktualne kryteria"""
+/pauza i /wznow – wstrzymanie alertów (💎 perełki przychodzą zawsze)"""
+
+
+def start_text(s: Settings) -> str:
+    return f"""🚗 <b>Golf 7 Sniper</b> – szukam dla Ciebie Golfa
+
+<b>Czego szukam</b>
+• Golf 7 (2013–2016) i Golf 7.5 (2017–2020)
+• tylko 5-drzwiowy hatchback
+• do {fmt_pln(s.budget)} (do {fmt_pln(s.budget + s.budget_tolerance)} przy „do negocjacji”)
+• przebieg do {fmt_km(s.max_mileage)} (7.5: do {fmt_km(s.max_mileage + 20000)})
+• benzyna i diesel, manual i DSG
+
+<b>Wersje</b>
+⭐ R-Line – najwyższy priorytet
+🏁 GTI, GTD
+👍 Highline, Join, Sound, Lounge, IQ.Drive
+✔️ Comfortline, Allstar, Trendline, BlueMotion
+✖️ pomijam: Variant, Sportsvan, Alltrack, 3-drzwiowe, e-Golf, GTE
+⚠️ Golf R (300 KM) za te pieniądze = podejrzana oferta
+
+<b>Gdzie szukam</b>
+{", ".join(SOURCES.values())}
+
+<b>Alerty</b>
+💎 perełka (80+ pkt) – dzwoń od razu
+🔥 okazja (65+ pkt) – warto obejrzeć
+📋 raport dzienny o {s.daily_report_hour}:00
+
+<b>Komendy</b>
+{COMMANDS}"""
 
 
 def fmt_pln(v: int | None) -> str:
@@ -54,6 +83,9 @@ def format_alert(l: Listing, r: Result, *, price_drop: int | None = None) -> str
         "",
     ]
     price_line = f"💰 <b>{fmt_pln(l.price_pln)}</b>"
+    if l.extra.get("import") and l.extra.get("price_eur"):
+        eur = f"{int(l.extra['price_eur']):,}".replace(",", " ")
+        price_line += f" (auto {eur} € + szac. koszty sprowadzenia)"
     if l.negotiable:
         price_line += " (do negocjacji)"
     if r.expected:
@@ -74,7 +106,7 @@ def format_alert(l: Listing, r: Result, *, price_drop: int | None = None) -> str
         lines.append("⚠️ " + e(f))
     if l.vin:
         lines.append(f"🔎 VIN: <code>{e(l.vin)}</code>")
-    lines.append(f"\n<a href=\"{e(l.url)}\">Otwórz ogłoszenie ({l.source})</a>")
+    lines.append(f"\n<a href=\"{e(l.url)}\">Otwórz ogłoszenie – {SOURCES.get(l.source, l.source)}</a>")
     return "\n".join(lines)
 
 
@@ -179,35 +211,20 @@ class Telegram:
         self.send(self.command(cmd, arg.strip()))
 
     def command(self, cmd: str, arg: str) -> str:
-        s = self.s
-        if cmd in ("/start", "/help", "/pomoc"):
-            return HELP
-        if cmd == "/budzet" and arg.isdigit():
-            s.budget = int(arg); self.db.kv_set("budget", s.budget)
-            return f"Budżet ustawiony: {fmt_pln(s.budget)}"
-        if cmd == "/przebieg" and arg.isdigit():
-            s.max_mileage = int(arg); self.db.kv_set("max_mileage", s.max_mileage)
-            return f"Maks. przebieg: {fmt_km(s.max_mileage)} (7.5 dostaje +20 tys. km zapasu)"
-        if cmd == "/tylko_rline":
-            s.only_rline = arg.lower() in ("on", "tak", "1"); self.db.kv_set("only_rline", s.only_rline)
-            return "Tylko R-Line: " + ("włączone" if s.only_rline else "wyłączone")
+        if cmd in ("/start", "/help", "/pomoc", "/komendy"):
+            return start_text(self.s)
         if cmd == "/pauza":
             self.paused = True; self.db.kv_set("paused", True)
-            return "Alerty wstrzymane (perełki 💎 dalej przychodzą). /wznow żeby włączyć."
+            return "⏸ Alerty wstrzymane. 💎 Perełki dalej przychodzą. /wznow żeby włączyć."
         if cmd == "/wznow":
             self.paused = False; self.db.kv_set("paused", False)
-            return "Alerty włączone ✅"
-        if cmd == "/ustawienia":
-            return (f"Budżet: {fmt_pln(s.budget)} (+{fmt_pln(s.budget_tolerance)} przy „do negocjacji”)\n"
-                    f"Przebieg: do {fmt_km(s.max_mileage)}\nRoczniki: {s.year_from}–{s.year_to}\n"
-                    f"Nadwozie: hatchback 5d\nTylko R-Line: {'tak' if s.only_rline else 'nie'}\n"
-                    f"Progi: 💎 {s.tier_pearl}+ · 🔥 {s.tier_deal}+ · 👀 {s.tier_report}+")
+            return "▶️ Alerty włączone."
         if cmd == "/status":
             st = self.db.stats()
             extra = self.status_fn() if self.status_fn else ""
-            return (f"W bazie: {st['all']} ogłoszeń ({st['active']} aktywnych)\n"
+            return (f"✅ Bot działa\nW bazie: {st['all']} ogłoszeń ({st['active']} aktywnych)\n"
                     f"Pasujących do kryteriów: {st['candidates']}\nWysłanych alertów: {st['alerts']}\n"
-                    f"Alerty: {'wstrzymane' if self.paused else 'włączone'}\n{extra}")
+                    f"Alerty: {'wstrzymane ⏸' if self.paused else 'włączone'}\n{extra}")
         if cmd == "/raport":
             return self.report_text()
         if cmd == "/ulubione":
@@ -215,7 +232,7 @@ class Telegram:
             if not rows:
                 return "Brak ulubionych. Kliknij ⭐ pod alertem."
             return "⭐ <b>Ulubione</b>\n" + "\n".join(self._row_line(r) for r in rows[:20])
-        return "Nie znam tej komendy. /help"
+        return "Nie znam tej komendy.\n\n" + COMMANDS
 
     @staticmethod
     def _row_line(r) -> str:
@@ -230,7 +247,5 @@ class Telegram:
         return "📋 <b>Najlepsze z ostatnich 24 h</b>\n" + "\n".join(self._row_line(r) for r in rows)
 
     def load_saved_settings(self):
-        for k in ("budget", "max_mileage", "only_rline"):
-            v = self.db.kv_get(k)
-            if v is not None:
-                setattr(self.s, k, v)
+        """Ustawienia są w .env – komendy do ich zmiany zostały usunięte."""
+        return None

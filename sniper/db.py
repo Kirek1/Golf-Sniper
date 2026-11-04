@@ -142,7 +142,7 @@ class DB:
         out = []
         for r in rows:
             l = Listing.from_dict(json.loads(r["data"]))
-            if l.extra.get("golf7_hatch"):
+            if l.extra.get("golf7_hatch") and not l.extra.get("import"):   # import ma inną cenę
                 out.append(l)
         return out
 

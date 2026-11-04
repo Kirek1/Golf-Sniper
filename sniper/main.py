@@ -18,9 +18,12 @@ from .db import DB, TIER_RANK
 from .parse import enrich, hard_filter, is_golf7_hatch_5d
 from .scoring import MarketModel, score_listing
 from .scrapers.base import ScraperError
+from .scrapers.autoplac import AutoplacScraper
+from .scrapers.autoscout24 import AutoScout24Scraper
 from .scrapers.olx import OlxScraper
 from .scrapers.otomoto import OtomotoScraper
-from .telegram import Telegram
+from .scrapers.sprzedajemy import SprzedajemyScraper
+from .telegram import Telegram, start_text
 
 log = logging.getLogger("sniper")
 
@@ -32,7 +35,10 @@ class Sniper:
         self.tg = Telegram(self.s, self.db, dry_run=dry_run)
         self.tg.load_saved_settings()
         self.tg.status_fn = self.status
-        self.scrapers = [OtomotoScraper(self.s), OlxScraper(self.s)]
+        self.scrapers = [OtomotoScraper(self.s), OlxScraper(self.s), AutoplacScraper(self.s),
+                         SprzedajemyScraper(self.s)]
+        if self.s.import_enabled:
+            self.scrapers.append(AutoScout24Scraper(self.s))
         saved_fail = self.db.kv_get("failures", {})
         self.failures = {sc.name: saved_fail.get(sc.name, 0) for sc in self.scrapers}
         self.last_ok: dict[str, str] = self.db.kv_get("last_ok", {})
@@ -55,7 +61,8 @@ class Sniper:
         alerts = 0
         for sc in self.scrapers:
             try:
-                items = sc.search(pages=5 if market else 2, market=market)
+                pages = getattr(sc, "market_pages" if market else "sniper_pages", 1)
+                items = sc.search(pages=pages, market=market)
                 self.failures[sc.name] = 0
                 self.last_ok[sc.name] = datetime.now().strftime("%d.%m %H:%M")
             except (ScraperError, Exception) as e:  # noqa: BLE001
@@ -152,7 +159,7 @@ class Sniper:
 
     def run_forever(self):
         self.tg.start_polling()
-        self.tg.send("🚗 Golf 7 Sniper wystartował. /help – lista komend.", silent=True)
+        self.tg.send("🟢 Bot wystartował i szuka ofert.\n\n" + start_text(self.s), silent=True)
         while True:
             try:
                 if time.time() - self.last_market > self.s.market_interval:
@@ -174,9 +181,8 @@ class Sniper:
         except Exception as e:  # noqa: BLE001
             log.warning("Komendy Telegrama: %s", e)
         if not self.db.kv_get("welcomed"):
-            self.tg.send("🚗 Golf 7 Sniper działa na GitHubie. /help – lista komend.\n"
-                         "Komendy obsługuję przy każdym skanie, więc odpowiedź może przyjść po kilkunastu minutach.",
-                         silent=True)
+            self.tg.send("🟢 Bot działa na GitHubie (odpowiedzi na komendy przy każdym skanie).\n\n"
+                         + start_text(self.s), silent=True)
             self.db.kv_set("welcomed", True)
         if time.time() - self.last_market > self.s.market_interval:
             self.refresh_market()

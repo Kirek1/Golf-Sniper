@@ -125,7 +125,8 @@ def enrich(l: Listing, params_version: str | None = None) -> Listing:
     l.facelift = detect_facelift(l)
     if l.vin:
         l.vin = l.vin.strip().upper()
-        if not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", l.vin):
+        # OLX/Sprzedajemy pokazują zamaskowany VIN ("xxxxxxxx…") – to nie jest prawdziwy numer
+        if not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", l.vin) or len(set(l.vin)) < 6:
             l.vin = None
     if not l.vin:
         m = re.search(r"\b(WVWZZZ[A-HJ-NPR-Z0-9]{11})\b", l.description.upper())
@@ -143,7 +144,7 @@ def enrich(l: Listing, params_version: str | None = None) -> Listing:
 
 NOT_HATCH_RE = re.compile(r"\b(variant|kombi|alltrack|sportsvan|sports\s?van|kabrio|cabrio|plus)\b", re.I)
 NEGATED_RE = re.compile(r"(nie\s?uszkodz\w*|bez\s+uszkodze\w*|nigdy\s+nie\s+by\w+\s+(uszkodz|zalan)\w*|nie\s?zalan\w*|nie\s?anglik)", re.I)
-NOT_GOLF7_RE = re.compile(r"\bgolf\s*(iv|v|vi|viii|4|5|6|8)\b(?![\.,]5)(?!\s*-?\s*(d\b|drzw))", re.I)
+NOT_GOLF7_RE = re.compile(r"\bgolf\s*(iv|v|vi|viii)\b|\bgolf\s*[4568](?![\.,]5)(?!\d)(?!\s*-?\s*(d\b|p\b|drzw|porte|t\b|türer|motion))", re.I)
 
 
 def is_golf7_hatch_5d(l: Listing) -> tuple[bool, str]:

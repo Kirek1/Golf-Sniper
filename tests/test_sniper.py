@@ -196,10 +196,11 @@ def test_alert_format_and_commands(tmp_path):
     r = score_listing(l, market(), s, current_year=2026)
     text = format_alert(l, r)
     assert "PEREŁKA" in text and "38 900 zł" in text and "Golf 7.5 R-Line" in text
-    assert "zł" in tg.command("/budzet", "42000") and s.budget == 42000
-    assert db.kv_get("budget") == 42000
-    assert "wyłączone" in tg.command("/tylko_rline", "off")
-    assert "Budżet" in tg.command("/ustawienia", "")
+    start = tg.command("/start", "")
+    for word in ("R-Line", "GTI", "GTD", "Highline", "Trendline", "7.5", "hatchback", "OLX", "Autoplac"):
+        assert word in start, word
+    assert "Nie znam" in tg.command("/budzet", "42000")
+    assert "wstrzymane" in tg.command("/pauza", "") and tg.paused
 
 
 def test_db_price_drop_and_duplicates(tmp_path):
@@ -239,3 +240,149 @@ def test_scheduled_run_offline(tmp_path, monkeypatch):
     assert sn.db.kv_get("failures")["olx"] == 2          # skan rynku + zwykły skan
     sn2 = m.Sniper(dry_run=True)                         # stan przetrwał "restart"
     assert sn2.last_market > 0 and sn2.failures["olx"] == 2
+
+
+# --- nowe źródła: próbki na podstawie prawdziwych stron (04.11.2026) ----
+
+OLX_AD = {
+    "id": 1109964626, "title": "Volkswagen Golf Auto z Gwarancją/Bezwypadek/DSG/PDC",
+    "url": "https://www.olx.pl/d/oferta/volkswagen-golf-auto-z-gwarancja-bezwypadek-dsg-pdc-CID5-ID1d7iwg.html",
+    "description": "Do sprzedania posiadam sprowadzonego z Niemiec Volkswagen Golf 2013 R-Line",
+    "isBusiness": False, "createdTime": "2026-11-04T20:46:44+01:00", "partner": None, "externalUrl": None,
+    "price": {"displayValue": "32 999 zł", "regularPrice": {"value": 32999, "currencyCode": "PLN", "negotiable": False}},
+    "location": {"cityName": "Będzin", "regionName": "Śląskie"},
+    "photos": ["https://ireland.apollo.olxcdn.com:443/v1/files/vo4jrh4x2exu2-PL/image;s=2048x946"],
+    "params": [
+        {"key": "vin", "value": "xxxxxxxxxxxxxxxxx", "normalizedValue": "xxxxxxxxxxxxxxxxx"},
+        {"key": "model", "value": "Golf", "normalizedValue": "golf"},
+        {"key": "year", "value": "2013", "normalizedValue": "2013"},
+        {"key": "petrol", "value": "Benzyna", "normalizedValue": "petrol"},
+        {"key": "car_body", "value": "Hatchback", "normalizedValue": "hatchback"},
+        {"key": "enginesize", "value": "1 395 cm³", "normalizedValue": "1395"},
+        {"key": "condition", "value": "Nieuszkodzony", "normalizedValue": "notdamaged"},
+        {"key": "transmission", "value": "Automatyczna", "normalizedValue": "automatic"},
+        {"key": "country_origin", "value": "Niemcy", "normalizedValue": "d"},
+        {"key": "enginepower", "value": "122 KM", "normalizedValue": "122"},
+        {"key": "milage", "value": "169 000 km", "normalizedValue": "169000"},
+        {"key": "righthanddrive", "value": "po lewej", "normalizedValue": "1"}],
+}
+
+
+def _olx_html(ads):
+    state = json.dumps({"listing": {"listing": {"ads": ads}}})
+    return f"<script>window.__PRERENDERED_STATE__= {json.dumps(state)};</script>"
+
+
+def test_olx_prerendered_state():
+    from sniper.scrapers import olx
+    sportsvan = json.loads(json.dumps(OLX_AD)); sportsvan["id"] = 2
+    sportsvan["params"][1] = {"key": "model", "value": "Golf Sportsvan", "normalizedValue": "golf-sportsvan"}
+    from_otomoto = dict(OLX_AD, id=3, partner={"code": "otomoto_pl"})
+    items = olx.parse_search(_olx_html([OLX_AD, sportsvan, from_otomoto]))
+    assert [i.listing_id for i in items] == ["1109964626", "2"]
+    l = items[0]
+    assert (l.price_pln, l.year, l.mileage_km, l.engine_cc, l.power_hp, l.gearbox) == (32999, 2013, 169000, 1395, 122, "automat")
+    assert l.vin is None and l.extra["vin_available"]          # zamaskowany VIN
+    assert l.location == "Będzin, Śląskie" and l.seller_type == "prywatny"
+    assert hard_filter(l, S)[0]
+    assert not hard_filter(items[1], S)[0]                     # Sportsvan odpada
+
+
+def test_autoplac_ng_state():
+    from sniper.scrapers import autoplac
+    offer = {"offer": {"sellerType": "PRIVATE", "id": 4796143, "brand": "Volkswagen", "model": "Golf",
+                       "generation": "VII", "version": "Inny", "productionYear": 2016, "mileage": 140000,
+                       "enginePowerKW": 81, "engineCapacity": 1197, "bodyType": "HATCHBACK", "bodyTypeText": "Hatchback",
+                       "fuelType": "GASOLINE", "vinAvailable": True, "transmissionTypeText": "Manualna",
+                       "priceInfo": {"primary": {"price": 36900}}, "city": "Zduńska Wola",
+                       "voivodeshipDisplay": "Łódzkie", "vehicleOrigin": "DOMESTIC",
+                       "title": "Volkswagen Golf VII 1.2 VW 7 2016 r Salon Polska", "insertTime": 1791965908432,
+                       "webUrl": "/oferta/volkswagen/golf/vii-1-2-2016r-vw-7-2016-r-salon-polska-8510-5560-YQ"},
+             "photoList": [{"url": "https://euw2-cdn.autoplac.pl/v1/p/x?f=1920:webp"}]}
+    ng = {"https://api.autoplac.pl/offers/search?orderBy=INSERT_TIME&seoCategories=samochody-osobowe,volkswagen,golf,vii":
+          {"body": {"offerList": [offer], "offerCount": 1}, "status": 200}}
+    html = f'<script id="ng-state" type="application/json">{json.dumps(ng)}</script>'
+    items = autoplac.parse_search(html)
+    l = items[0]
+    assert l.url.startswith("https://autoplac.pl/oferta/") and l.price_pln == 36900
+    assert (l.year, l.mileage_km, l.power_hp, l.fuel, l.gearbox) == (2016, 140000, 110, "benzyna", "manual")
+    assert l.country_origin == "Polska" and l.seller_type == "prywatny" and l.extra["vin_available"]
+    assert hard_filter(l, S)[0]
+
+
+SPRZ_LIST = """<script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","itemListElement":[
+ {"@type":["ListItem","Offer"],"name":"Volkswagen Golf VI","url":"https://sprzedajemy.pl/volkswagen-golf-vi-olesno-4-6bea9f-nr73992989","price":19000,"priceCurrency":"PLN"},
+ {"@type":["ListItem","Offer"],"name":"Volkswagen Golf 7 R-Line 1.4 TSI","url":"https://sprzedajemy.pl/volkswagen-golf-7-r-line-krakow-nr72783213","price":37900,"priceCurrency":"PLN"}]}</script>"""
+
+SPRZ_DETAIL = """<ul><li class="item"> <span>Stan</span> <strong>używane </strong> </li>
+<li class="item"> <span>Rok pierwszej rejestracji</span> <strong>2016 </strong> </li>
+<li class="item"> <span>Rok produkcji</span> <strong>2016 </strong> </li>
+<li class="item"> <span>Przebieg</span> <strong>142000 km</strong> </li>
+<li class="item"> <span>Rodzaj nadwozia</span> <strong>Hatchback </strong> </li>
+<li class="item"> <span>Pojemność silnika</span> <strong>1400 cm³</strong> </li>
+<li class="item"> <span>Moc</span> <strong>125 KM</strong> </li>
+<li class="item"> <span>Paliwo</span> <strong>benzyna </strong> </li>
+<li class="item"> <span>Liczba drzwi</span> <strong>4/5 </strong> </li>
+<li class="item"> <span>Stan techniczny</span> <strong>nieuszkodzony </strong> </li>
+<li class="item"> <span>Skrzynia biegów</span> <strong>manualna </strong> </li></ul>
+<div class="seller-type-info seller-type-info--private"><span class="seller-type-info__label">OSOBA PRYWATNA</span></div>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Vehicle","description":"Golf 7 R-Line, serwis ASO"}</script>"""
+
+
+def test_sprzedajemy_list_and_detail():
+    from sniper.scrapers import sprzedajemy
+    items = sprzedajemy.parse_search(SPRZ_LIST)
+    assert [i.listing_id for i in items] == ["73992989", "72783213"]
+    assert not hard_filter(items[0], S)[0]                     # Golf VI odpada od razu po tytule
+    l = items[1]
+    assert hard_filter(l, S)[0] and l.year is None             # rocznik dopiero ze szczegółów
+    l = sprzedajemy.parse_detail(SPRZ_DETAIL, l)
+    assert (l.year, l.mileage_km, l.engine_cc, l.power_hp, l.doors, l.fuel, l.gearbox) == \
+        (2016, 142000, 1400, 125, 5, "benzyna", "manual")
+    assert l.seller_type == "prywatny" and "ASO" in l.description and l.body == "Hatchback"
+    assert hard_filter(l, S)[0]
+
+
+def test_autoscout24_import_price():
+    from sniper.scrapers import autoscout24 as a24
+    listing = {"id": "8e645f21-b7c0-4824-9738-0b0cf9cfa37d", "price": {"priceRaw": 8950},
+               "url": "/oferta/volkswagen-golf-allstar-diesel-czarny-cat_ma74mo2084-8e645f21",
+               "vehicle": {"make": "Volkswagen", "model": "Golf", "variant": "Golf", "motorTypeName": "1.6 TDI",
+                           "modelVersionInput": "Allstar BMT PDC", "transmission": "Manualna", "fuel": "Diesel",
+                           "mileageInKm": "194 975 km", "engineDisplacementInCCM": "1 598 cm³", "isCurrentlyDamaged": False},
+               "location": {"countryCode": "DE", "city": "Mülheim"}, "seller": {"type": "Dealer"},
+               "tracking": {"firstRegistration": "01-2017", "mileage": "194975", "price": "8950"},
+               "vehicleDetails": [{"data": "81 kW (110 KM)"}]}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps({"props": {"pageProps": {"listings": [listing]}}})}</script>'
+    l = a24.parse_search(html, 4.25)[0]
+    assert l.price_pln == a24.import_cost_pln(8950, 4.25, 1598) == 42700
+    assert (l.year, l.mileage_km, l.power_hp, l.country_origin, l.seller_type) == (2017, 194975, 110, "Niemcy", "firma")
+    assert l.trim == "allstar" and l.extra["import"] and l.facelift
+    r = score_listing(l, market(), S, current_year=2026)
+    assert any("import" in f for f in r.flags)
+    assert not hard_filter(l, S)[0]                            # 42 700 zł > 40 000 zł → odpada
+
+
+# --- prawdziwe strony zapisane 04.11.2026 (regresja: jeśli parser się zepsuje, to wyjdzie tutaj) ----
+import pathlib
+
+FIX = pathlib.Path(__file__).parent / "fixtures"
+
+
+def test_real_olx_page():
+    from sniper.scrapers import olx
+    ads = json.loads((FIX / "olx_ads_real.json").read_text(encoding="utf-8"))
+    items = olx.parse_search(_olx_html(ads))
+    assert len(ads) > 40 and len(items) >= 10                       # część to ogłoszenia OtoMoto – pomijane
+    assert all(i.price_pln and i.year for i in items)
+    reasons = {hard_filter(i, S)[1] for i in items}
+    assert "nadwozie nie hatchback" in reasons                     # kombi wycięte
+    assert any(hard_filter(i, S)[0] for i in items)
+
+
+def test_real_autoplac_page():
+    from sniper.scrapers import autoplac
+    ng = json.loads((FIX / "autoplac_ng_real.json").read_text(encoding="utf-8"))
+    items = autoplac.parse_search(f'<script id="ng-state" type="application/json">{json.dumps(ng)}</script>')
+    assert len(items) >= 20 and all(i.price_pln and i.year and i.mileage_km for i in items)
+    assert any(hard_filter(i, S)[0] for i in items)

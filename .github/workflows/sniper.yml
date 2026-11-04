@@ -1,9 +1,12 @@
 name: Golf 7 Sniper
 
+# Bot działa teraz na VPS-ie (systemd). Harmonogram na GitHubie jest wyłączony,
+# żeby oferty nie przychodziły podwójnie. Zapasowo można odpalić skan ręcznie
+# (Actions → Golf 7 Sniper → Run workflow) albo odkomentować schedule.
 on:
-  schedule:
-    - cron: "*/10 * * * *"     # GitHub uruchamia to zwykle co 10–20 min (bywa wolniej)
-  workflow_dispatch:            # przycisk "Run workflow" do ręcznego uruchomienia
+  # schedule:
+  #   - cron: "*/10 * * * *"
+  workflow_dispatch:
 
 concurrency:
   group: sniper                 # nigdy dwa skany naraz

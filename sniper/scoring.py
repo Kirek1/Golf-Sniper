@@ -127,6 +127,8 @@ def score_listing(l: Listing, model: MarketModel, s: Settings, *,
     hist = 0
     if l.vin:
         hist += 6; plus.append("VIN")
+    elif l.extra.get("vin_available"):
+        hist += 4; plus.append("VIN dostępny u sprzedającego")
     elif l.detail_loaded:
         flags.append("brak VIN")
     if l.registered_pl or (l.country_origin or "").lower() in ("polska", "pl"):
@@ -166,6 +168,8 @@ def score_listing(l: Listing, model: MarketModel, s: Settings, *,
         fresh_pts = 5; plus.append(f"obniżka o {price_drop:,} zł".replace(",", " "))
 
     # --- czerwone flagi blokujące --------------------------------------
+    if l.extra.get("import"):
+        flags.append(f"import ({l.country_origin or 'zagranica'}) – cena zawiera szacowane koszty sprowadzenia")
     if l.trim == "golf-r":
         flags.append("Golf R (300 KM) za tę cenę – prawie na pewno szkoda lub oszustwo")
         blocking = True
