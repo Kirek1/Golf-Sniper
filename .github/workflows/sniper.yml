@@ -1,0 +1,51 @@
+name: Golf 7 Sniper
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"     # GitHub uruchamia to zwykle co 10–20 min (bywa wolniej)
+  workflow_dispatch:            # przycisk "Run workflow" do ręcznego uruchomienia
+
+concurrency:
+  group: sniper                 # nigdy dwa skany naraz
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Europe/Warsaw
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      BUDGET: ${{ vars.BUDGET || '40000' }}
+      MAX_MILEAGE: ${{ vars.MAX_MILEAGE || '180000' }}
+      DB_PATH: data/sniper.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Baza ofert (historia cen, wycena, wysłane alerty) przechowywana między uruchomieniami
+      - name: Przywróć bazę
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: sniper-db-${{ github.run_id }}
+          restore-keys: sniper-db-
+
+      - name: Skan
+        run: |
+          mkdir -p data
+          python -m sniper.main --scheduled
+
+      - name: Zapisz bazę
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: sniper-db-${{ github.run_id }}
