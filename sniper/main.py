@@ -17,13 +17,13 @@ from .config import settings
 from .db import DB, TIER_RANK
 from .parse import enrich, hard_filter, is_golf7_hatch_5d
 from .scoring import MarketModel, score_listing
-from .scrapers.base import ScraperError
+from .scrapers.base import BlockedError, ScraperError
 from .scrapers.autoplac import AutoplacScraper
 from .scrapers.autoscout24 import AutoScout24Scraper
 from .scrapers.olx import OlxScraper
 from .scrapers.otomoto import OtomotoScraper
 from .scrapers.sprzedajemy import SprzedajemyScraper
-from .telegram import Telegram, start_text
+from .telegram import SOURCES, Telegram, start_text
 
 log = logging.getLogger("sniper")
 
@@ -59,18 +59,34 @@ class Sniper:
     # --- jeden przebieg -----------------------------------------------
     def scan(self, market: bool = False) -> int:
         alerts = 0
+        paused = self.db.kv_get("paused_sources", {})
         for sc in self.scrapers:
+            if paused.get(sc.name, 0) > time.time():
+                continue               # portal blokował serwer – odpoczywa do jutra
             try:
                 pages = getattr(sc, "market_pages" if market else "sniper_pages", 1)
                 items = sc.search(pages=pages, market=market)
                 self.failures[sc.name] = 0
                 self.last_ok[sc.name] = datetime.now().strftime("%d.%m %H:%M")
+            except BlockedError as e:
+                self.failures[sc.name] += 1
+                log.error("%s: %s", sc.name, e)
+                if self.failures[sc.name] >= 3:
+                    paused[sc.name] = time.time() + 24 * 3600
+                    self.db.kv_set("paused_sources", paused)
+                    self.failures[sc.name] = 0
+                    log.warning("%s blokuje serwer – przerwa na 24 h", sc.name)
+                    if not self.db.kv_get(f"blocked_told_{sc.name}"):
+                        self.tg.send(f"ℹ️ {SOURCES.get(sc.name, sc.name)} blokuje Twój serwer (403). "
+                                     "Spróbuję ponownie za dobę, reszta portali działa normalnie.", silent=True)
+                        self.db.kv_set(f"blocked_told_{sc.name}", True)
+                continue
             except (ScraperError, Exception) as e:  # noqa: BLE001
                 self.failures[sc.name] += 1
                 log.error("%s: %s", sc.name, e)
                 if self.failures[sc.name] == 5:
-                    self.tg.send(f"⚠️ {sc.name}: 5 nieudanych skanów z rzędu ({str(e)[:200]}). "
-                                 "Portal zmienił stronę albo blokuje serwery GitHuba.")
+                    self.tg.send(f"⚠️ {SOURCES.get(sc.name, sc.name)}: 5 nieudanych skanów z rzędu "
+                                 f"({str(e)[:200]}). Portal pewnie zmienił stronę – parser do poprawki.")
                 continue
             finally:
                 self.db.kv_set("failures", self.failures)

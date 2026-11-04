@@ -386,3 +386,26 @@ def test_real_autoplac_page():
     items = autoplac.parse_search(f'<script id="ng-state" type="application/json">{json.dumps(ng)}</script>')
     assert len(items) >= 20 and all(i.price_pln and i.year and i.mileage_km for i in items)
     assert any(hard_filter(i, S)[0] for i in items)
+
+
+def test_blocked_source_pauses_for_a_day(tmp_path, monkeypatch):
+    from sniper import main as m
+    from sniper.scrapers.base import BlockedError
+    monkeypatch.setattr(m.settings, "db_path", str(tmp_path / "b.db"))
+    sn = m.Sniper(dry_run=True)
+    calls = {"n": 0}
+
+    class Blocked:
+        name = "autoplac"
+        def search(self, pages=1, market=False):
+            calls["n"] += 1
+            raise BlockedError("HTTP 403")
+        def detail(self, l): return l
+
+    sn.scrapers = [Blocked()]
+    sn.failures = {"autoplac": 0}
+    for _ in range(5):
+        sn.scan()
+    assert calls["n"] == 3                                  # po 3 blokadach – przerwa, dalej nie pyta
+    assert sn.db.kv_get("paused_sources")["autoplac"] > 0
+    assert sn.db.kv_get("blocked_told_autoplac")           # jedna informacja na Telegramie

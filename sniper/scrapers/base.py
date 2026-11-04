@@ -19,6 +19,10 @@ class ScraperError(Exception):
     pass
 
 
+class BlockedError(ScraperError):
+    """Portal odpowiada 403 – blokuje ten serwer."""
+
+
 try:  # łączy się jak prawdziwy Chrome – portale blokują "odcisk" zwykłych bibliotek Pythona
     from curl_cffi import requests as chrome_requests
 except ImportError:  # pragma: no cover
@@ -53,11 +57,26 @@ class Http:
                 timeout=25, follow_redirects=True, http2=False)
         self.min_delay, self.max_delay = min_delay, max_delay
         self._last = 0.0
+        self._warmed: set[str] = set()
+
+    def _warmup(self, url: str):
+        """Pierwsze wejście na stronę główną – jak człowiek. Ochrona antybotowa często
+        wydaje wtedy ciasteczka, bez których strona wyników zwraca 403."""
+        root = "/".join(url.split("/")[:3]) + "/"
+        if root in self._warmed:
+            return
+        self._warmed.add(root)
+        try:
+            self.client.get(root)
+            time.sleep(random.uniform(1.5, 3.0))
+        except Exception as e:  # noqa: BLE001
+            log.debug("Rozgrzewka %s: %s", root, e)
 
     def get(self, url: str, params: dict | None = None, *, as_json: bool = False):
         wait = self._last + random.uniform(self.min_delay, self.max_delay) - time.monotonic()
         if wait > 0:
             time.sleep(wait)
+        self._warmup(url)
         for attempt in range(3):
             self._last = time.monotonic()
             try:
@@ -73,7 +92,11 @@ class Http:
             if r.status_code == 404:
                 return None
             if r.status_code == 403:
-                raise ScraperError(f"HTTP 403 dla {url} – portal blokuje to połączenie")
+                if attempt == 0:      # spróbuj raz jeszcze po wejściu na stronę główną
+                    self._warmed.discard("/".join(url.split("/")[:3]) + "/")
+                    self._warmup(url)
+                    continue
+                raise BlockedError(f"HTTP 403 dla {url} – portal blokuje to połączenie")
             if r.status_code >= 400:
                 raise ScraperError(f"HTTP {r.status_code} dla {url}")
             return r.json() if as_json else r.text

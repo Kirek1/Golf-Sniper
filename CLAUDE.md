@@ -34,7 +34,7 @@ Rozmawiaj z użytkownikiem **po polsku**, prostym językiem – nie jest program
 - GitHub Actions (`.github/workflows/sniper.yml`) – tylko ręczne uruchomienie, harmonogram wyłączony (dwa boty = podwójne alerty).
 - Sekrety w repo: `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`. **Nigdy nie zapisuj tokenu w kodzie ani w commitach.**
 - Komendy z Telegrama są obsługiwane na początku każdego skanu (opóźnienie do kilkunastu minut).
-- 2026-11-04: z VPS-a OtoMoto działa przez curl_cffi; OLX API dawało 403, stąd przejście na stronę wyników.
+- 2026-11-04 (test z VPS): OtoMoto, OLX (strona wyników), Sprzedajemy i AutoScout24 działają; Autoplac zwraca 403. Http robi „rozgrzewkę” (wejście na stronę główną) i ponawia raz; po 3 blokadach z rzędu portal ma przerwę 24 h (`paused_sources` w kv) i jedną cichą informację na Telegramie.
 
 ## Do sprawdzenia / pomysły
 - Po każdej zmianie sprawdź w logach (`journalctl -u golf-sniper`) linijki „<Portal> strona 1: N ogłoszeń” dla wszystkich źródeł.
