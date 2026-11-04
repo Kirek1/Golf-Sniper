@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import threading
 import time
@@ -22,7 +23,7 @@ SOURCES = {"otomoto": "OtoMoto", "olx": "OLX", "autoplac": "Autoplac", "sprzedaj
 
 COMMANDS = """/start – ta wiadomość
 /status – czy bot działa, ile ofert w bazie
-/raport – najlepsze oferty z ostatnich 24 h
+/raport – wszystkie aktualne oferty, które pasują (od najlepszej)
 /ulubione – oferty oznaczone ⭐
 /pauza i /wznow – wstrzymanie alertów (💎 perełki przychodzą zawsze)"""
 
@@ -150,6 +151,16 @@ class Telegram:
         return data.get("result")
 
     def send(self, text: str, keyboard: dict | None = None, silent: bool = False):
+        if len(text) > 3900:                       # Telegram przyjmuje max 4096 znaków
+            chunk, parts = "", []
+            for line in text.split("\n"):
+                if len(chunk) + len(line) + 1 > 3900:
+                    parts.append(chunk); chunk = ""
+                chunk += line + "\n"
+            parts.append(chunk)
+            for p in parts[:-1]:
+                self.send(p, silent=silent)
+            return self.send(parts[-1], keyboard, silent)
         payload = {"chat_id": self.s.telegram_chat_id, "text": text, "parse_mode": "HTML",
                    "disable_web_page_preview": False, "disable_notification": silent}
         if keyboard:
@@ -238,15 +249,31 @@ class Telegram:
 
     @staticmethod
     def _row_line(r) -> str:
+        try:
+            d = json.loads(r["data"])
+        except (TypeError, ValueError):
+            d = {}
+        trim = {"r-line": "R-Line", "golf-r": "R"}.get(d.get("trim") or "", (d.get("trim") or "").title())
+        name = " ".join(x for x in ("Golf 7.5" if d.get("facelift") else "Golf 7", trim,
+                                     "DSG" if d.get("gearbox") == "automat" else "") if x)
+        icon = {"perelka": "💎", "okazja": "🔥"}.get(r["tier"], "•")
         gone = "" if r["active"] else " · nieaktywne"
-        return (f"• {r['score']}/100 · {r['year']} · {fmt_km(r['mileage'])} · {fmt_pln(r['price'])}"
-                f"{gone} – <a href=\"{html.escape(r['url'])}\">link</a>")
+        src = SOURCES.get(r["source"], r["source"]).split(" ")[0]
+        return (f"{icon} <b>{r['score']}</b> · {html.escape(name)} · {r['year'] or '?'} · {fmt_km(r['mileage'])} · "
+                f"<b>{fmt_pln(r['price'])}</b>{gone} – <a href=\"{html.escape(r['url'])}\">{src}</a>")
 
-    def report_text(self) -> str:
-        rows = self.db.recent_candidates(24)
+    def report_text(self, daily: bool = False) -> str:
+        if daily:
+            rows = self.db.recent_candidates(24)
+            if not rows:
+                return "📋 Ostatnie 24 h: nic nowego, co pasuje do kryteriów."
+            return "📋 <b>Najlepsze nowe oferty z ostatnich 24 h</b>\n\n" + "\n".join(self._row_line(r) for r in rows)
+        rows = self.db.active_candidates(40)
         if not rows:
-            return "📋 Ostatnie 24 h: nic nowego, co pasuje do kryteriów."
-        return "📋 <b>Najlepsze z ostatnich 24 h</b>\n" + "\n".join(self._row_line(r) for r in rows)
+            return "📋 Na razie żadna aktualna oferta nie spełnia kryteriów."
+        return (f"📋 <b>Wszystkie aktualne oferty, które pasują ({len(rows)})</b>\n"
+                "💎 perełka · 🔥 okazja · • pozostałe, liczba = punkty\n\n"
+                + "\n".join(self._row_line(r) for r in rows))
 
     def load_saved_settings(self):
         """Ustawienia są w .env – komendy do ich zmiany zostały usunięte."""

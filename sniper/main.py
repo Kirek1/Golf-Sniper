@@ -192,7 +192,7 @@ class Sniper:
         now = datetime.now()
         day = now.strftime("%Y-%m-%d")
         if now.hour >= self.s.daily_report_hour and self.last_report_day != day:
-            self.tg.send(self.tg.report_text(), silent=True)
+            self.tg.send(self.tg.report_text(daily=True), silent=True)
             self.last_report_day = day
             self.db.kv_set("last_report_day", day)
 

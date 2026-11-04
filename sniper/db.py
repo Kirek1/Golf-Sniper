@@ -154,6 +154,14 @@ class DB:
                 "AND (user_status IS NULL OR user_status<>'ignore') ORDER BY score DESC LIMIT 15",
                 (cutoff,)).fetchall()
 
+    def active_candidates(self, limit: int = 40) -> list[sqlite3.Row]:
+        """Wszystkie aktualne oferty spełniające kryteria, od najlepszej."""
+        with self.lock:
+            return self.conn.execute(
+                "SELECT * FROM listings WHERE passes_filter=1 AND active=1 AND score IS NOT NULL "
+                "AND (user_status IS NULL OR user_status<>'ignore') ORDER BY score DESC LIMIT ?",
+                (limit,)).fetchall()
+
     def favourites(self) -> list[sqlite3.Row]:
         with self.lock:
             return self.conn.execute(

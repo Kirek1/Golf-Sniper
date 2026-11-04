@@ -409,3 +409,17 @@ def test_blocked_source_pauses_for_a_day(tmp_path, monkeypatch):
     assert calls["n"] == 3                                  # po 3 blokadach – przerwa, dalej nie pyta
     assert sn.db.kv_get("paused_sources")["autoplac"] > 0
     assert sn.db.kv_get("blocked_told_autoplac")           # jedna informacja na Telegramie
+
+
+def test_raport_lists_all_and_splits(tmp_path):
+    db = DB(str(tmp_path / "r.db"))
+    tg = Telegram(Settings(), db, dry_run=True)
+    for i in range(45):
+        l = car(listing_id=str(i), price_pln=33000 + i * 100)
+        db.upsert(l, True)
+        db.set_score(l.key, 40000, 90 - i, "okazja" if i < 5 else "raport")
+    sent = []
+    tg._call = lambda method, **p: sent.append(p.get("text", ""))
+    tg.send(tg.command("/raport", ""))
+    assert len(sent) >= 2 and all(len(t) <= 4096 for t in sent)
+    assert "(40)" in sent[0] and "🔥" in sent[0]
