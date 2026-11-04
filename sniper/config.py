@@ -20,8 +20,8 @@ _load_dotenv()
 
 @dataclass
 class Settings:
-    telegram_token: str = os.getenv("TELEGRAM_TOKEN", "")
-    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    telegram_token: str = os.getenv("TELEGRAM_TOKEN", "").strip()
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     db_path: str = os.getenv("DB_PATH", "sniper.db")
 
     # Kryteria (można zmieniać komendami w bocie)
