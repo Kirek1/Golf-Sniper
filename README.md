@@ -40,6 +40,7 @@ After=network-online.target
 
 [Service]
 User=$USER
+Environment=TZ=Europe/Warsaw
 WorkingDirectory=$HOME/golf-sniper
 ExecStart=$HOME/golf-sniper/.venv/bin/python -m sniper.main
 Restart=always
