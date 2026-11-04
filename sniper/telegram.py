@@ -101,10 +101,18 @@ class Telegram:
             if method == "sendMessage":
                 print("\n" + "=" * 60 + "\n" + payload.get("text", "") + "\n" + "=" * 60)
             return {}
-        r = self.client.post(f"{self.api}/{method}", json=payload)
-        data = r.json()
+        try:
+            r = self.client.post(f"{self.api}/{method}", json=payload)
+            data = r.json()
+        except Exception as e:  # noqa: BLE001  – brak Telegrama nie może zatrzymać skanu
+            log.error("Telegram %s: brak połączenia (%s)", method, e)
+            return None
         if not data.get("ok"):
             log.error("Telegram %s: %s", method, data)
+            if data.get("error_code") == 401:
+                log.error(">>> Zły TELEGRAM_TOKEN – sprawdź sekret w Settings → Secrets → Actions")
+            if data.get("error_code") == 400 and "chat not found" in str(data):
+                log.error(">>> Zły TELEGRAM_CHAT_ID albo nie napisałeś do bota /start")
         return data.get("result")
 
     def send(self, text: str, keyboard: dict | None = None, silent: bool = False):

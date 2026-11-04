@@ -196,7 +196,11 @@ def main():
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not a.dry_run and not (settings.telegram_token and settings.telegram_chat_id):
-        raise SystemExit("Uzupełnij TELEGRAM_TOKEN i TELEGRAM_CHAT_ID w pliku .env (albo użyj --dry-run)")
+        missing = [n for n, v in (("TELEGRAM_TOKEN", settings.telegram_token),
+                                  ("TELEGRAM_CHAT_ID", settings.telegram_chat_id)) if not v]
+        raise SystemExit(f"BRAK: {', '.join(missing)}. Na GitHubie dodaj je w Settings → Secrets and "
+                         "variables → Actions → zakładka Secrets → New repository secret. "
+                         "Lokalnie wpisz je do pliku .env.")
     sn = Sniper(dry_run=a.dry_run)
     if a.scheduled:
         sn.run_scheduled()
