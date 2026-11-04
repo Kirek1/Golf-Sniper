@@ -45,7 +45,8 @@ ExecStart=$HOME/golf-sniper/.venv/bin/python -m sniper.main
 Restart=always
 RestartSec=30
 Nice=10
-MemoryMax=300M
+MemoryHigh=500M
+MemoryMax=900M
 
 [Install]
 WantedBy=multi-user.target

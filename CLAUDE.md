@@ -29,7 +29,7 @@ Rozmawiaj z użytkownikiem **po polsku**, prostym językiem – nie jest program
 - Progi: 💎 perełka ≥80 (alert od razu), 🔥 okazja ≥65, raport 50–64 (podsumowanie o 20:00).
 
 ## Wdrożenie
-- Docelowo działa na **VPS-ie użytkownika** (OVH, Ubuntu, 4 GB RAM, na tym samym serwerze stoi jego strona kirekreps) jako usługa systemd `golf-sniper` w `~/golf-sniper`, z limitem `MemoryMax=300M` i `Nice=10`, żeby nie przeszkadzać stronie.
+- Docelowo działa na **VPS-ie użytkownika** (OVH, Ubuntu, 4 GB RAM, na tym samym serwerze stoi jego strona kirekreps) jako usługa systemd `golf-sniper` w `~/golf-sniper`, z limitami `MemoryHigh=500M`, `MemoryMax=900M` i `Nice=10` (300M kończyło się OOM-killerem), żeby nie przeszkadzać stronie.
 - Aktualizacja na VPS: `git pull && .venv/bin/pip install -r requirements.txt && sudo systemctl restart golf-sniper`.
 - GitHub Actions (`.github/workflows/sniper.yml`) – tylko ręczne uruchomienie, harmonogram wyłączony (dwa boty = podwójne alerty).
 - Sekrety w repo: `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`. **Nigdy nie zapisuj tokenu w kodzie ani w commitach.**

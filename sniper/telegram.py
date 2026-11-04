@@ -137,7 +137,8 @@ class Telegram:
             r = self.client.post(f"{self.api}/{method}", json=payload)
             data = r.json()
         except Exception as e:  # noqa: BLE001  – brak Telegrama nie może zatrzymać skanu
-            log.error("Telegram %s: brak połączenia (%s)", method, e)
+            log.error("Telegram %s: brak połączenia (%s)", method,
+                      str(e).replace(self.s.telegram_token, "***") if self.s.telegram_token else e)
             return None
         if not data.get("ok"):
             log.error("Telegram %s: %s", method, data)

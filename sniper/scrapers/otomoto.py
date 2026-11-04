@@ -1,6 +1,7 @@
 """OtoMoto: lista wyników (__NEXT_DATA__ / GraphQL w urqlState) + strona ogłoszenia."""
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -39,8 +40,20 @@ def _param_map(node: dict) -> dict:
     return out
 
 
-def parse_search(html: str) -> list[Listing]:
+def _search_data(html: str):
+    """Tylko wpis z wynikami (advertSearch). Wpis z filtrami ma ~700 KB i nie jest potrzebny."""
     data = next_data(html)
+    urql = ((data.get("props") or {}).get("pageProps") or {}).get("urqlState")
+    if isinstance(urql, dict):
+        for v in urql.values():
+            raw = v.get("data") if isinstance(v, dict) else None
+            if isinstance(raw, str) and '"advertSearch"' in raw:
+                return json.loads(raw)
+    return data                       # inny układ strony – przeszukaj całość
+
+
+def parse_search(html: str) -> list[Listing]:
+    data = _search_data(html)
     seen, out = set(), []
     for d in walk(data):
         url = d.get("url")

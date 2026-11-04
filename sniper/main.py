@@ -8,6 +8,7 @@ Uruchomienie:
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import random
 import time
@@ -26,6 +27,18 @@ from .scrapers.sprzedajemy import SprzedajemyScraper
 from .telegram import SOURCES, Telegram, start_text
 
 log = logging.getLogger("sniper")
+
+
+def memory_mb() -> int:
+    """Aktualne zużycie pamięci procesu (Linux), do logów."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return 0
 
 
 class Sniper:
@@ -160,6 +173,8 @@ class Sniper:
         log.info("Pełny skan rynku do wyceny (także auta powyżej budżetu)")
         self.scan(market=True)
         self.model = MarketModel(self.db.market_rows())
+        gc.collect()
+        log.info("Pamięć po skanie rynku: %d MB", memory_mb())
         self.db.mark_inactive(48)
         self.last_market = time.time()
         self.db.kv_set("last_market", self.last_market)
@@ -181,7 +196,8 @@ class Sniper:
                 if time.time() - self.last_market > self.s.market_interval:
                     self.refresh_market()
                 n = self.scan()
-                log.info("Skan zakończony, alertów: %d", n)
+                gc.collect()
+                log.info("Skan zakończony, alertów: %d, pamięć: %d MB", n, memory_mb())
                 self.maybe_daily_report()
             except Exception:  # noqa: BLE001
                 log.exception("Nieoczekiwany błąd w pętli")
@@ -217,6 +233,9 @@ def main():
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx loguje pełne adresy – z tokenem bota w środku. Nie chcemy go w logach.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     if not a.dry_run and not (settings.telegram_token and settings.telegram_chat_id):
         missing = [n for n, v in (("TELEGRAM_TOKEN", settings.telegram_token),
                                   ("TELEGRAM_CHAT_ID", settings.telegram_chat_id)) if not v]
