@@ -15,7 +15,7 @@ na tle rynku i wysyła na Telegram tylko te warte telefonu.
 |---|---|---|
 | OtoMoto | strona wyników + ogłoszenie (VIN, ASO, drzwi) | największe źródło |
 | OLX | dane ze strony wyników | ogłoszenia przekierowujące na OtoMoto są pomijane |
-| Autoplac | dane ze strony wyników | |
+| Autoplac | dane ze strony wyników | blokuje serwery (403) – domyślnie wyłączony, włączysz `AUTOPLAC=1` w `.env` |
 | Sprzedajemy | lista + strona ogłoszenia | |
 | AutoScout24 | auta z DE/NL/BE/AT/IT… | cena = auto w € po kursie NBP + akcyza 3,1% + ~3 500 zł na sprowadzenie. Wyłączysz przez `IMPORT=0` w `.env` |
 

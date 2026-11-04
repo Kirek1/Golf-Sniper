@@ -32,6 +32,7 @@ class Settings:
     year_to: int = 2020
     only_rline: bool = os.getenv("ONLY_RLINE", "0") == "1"
     import_enabled: bool = os.getenv("IMPORT", "1") == "1"     # AutoScout24 (auta z zagranicy)
+    autoplac_enabled: bool = os.getenv("AUTOPLAC", "0") == "1"  # blokuje VPS-y (403), domyślnie wyłączony
 
     # Częstotliwość (sekundy)
     poll_interval: int = int(os.getenv("POLL_INTERVAL", "240"))

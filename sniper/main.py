@@ -48,10 +48,12 @@ class Sniper:
         self.tg = Telegram(self.s, self.db, dry_run=dry_run)
         self.tg.load_saved_settings()
         self.tg.status_fn = self.status
-        self.scrapers = [OtomotoScraper(self.s), OlxScraper(self.s), AutoplacScraper(self.s),
-                         SprzedajemyScraper(self.s)]
+        self.scrapers = [OtomotoScraper(self.s), OlxScraper(self.s), SprzedajemyScraper(self.s)]
+        if self.s.autoplac_enabled:
+            self.scrapers.append(AutoplacScraper(self.s))
         if self.s.import_enabled:
             self.scrapers.append(AutoScout24Scraper(self.s))
+        self.tg.sources = [sc.name for sc in self.scrapers]
         saved_fail = self.db.kv_get("failures", {})
         self.failures = {sc.name: saved_fail.get(sc.name, 0) for sc in self.scrapers}
         self.last_ok: dict[str, str] = self.db.kv_get("last_ok", {})
@@ -61,12 +63,18 @@ class Sniper:
         self.detail_budget = 10_000   # limit pobrań szczegółów na jedno uruchomienie
 
     def status(self) -> str:
-        lines = [f"Wycena oparta na {self.model.size} ofertach"]
-        for name, ts in self.last_ok.items():
-            lines.append(f"{name}: ostatni skan {ts}")
-        for name, n in self.failures.items():
-            if n:
-                lines.append(f"⚠️ {name}: {n} nieudanych skanów z rzędu")
+        lines = [f"Wycena oparta na {self.model.size} ofertach", "", "<b>Portale</b>"]
+        paused = self.db.kv_get("paused_sources", {})
+        for sc in self.scrapers:
+            label = SOURCES.get(sc.name, sc.name)
+            if paused.get(sc.name, 0) > time.time():
+                lines.append(f"⏸ {label}: przerwa (blokuje serwer)")
+            elif self.failures.get(sc.name, 0) >= 5:
+                lines.append(f"⚠️ {label}: nie działa od {self.failures[sc.name]} skanów")
+            elif sc.name in self.last_ok:
+                lines.append(f"✅ {label}: {self.last_ok[sc.name]}")
+            else:
+                lines.append(f"⏳ {label}: czeka na pierwszy skan")
         return "\n".join(lines)
 
     # --- jeden przebieg -----------------------------------------------
@@ -190,7 +198,7 @@ class Sniper:
 
     def run_forever(self):
         self.tg.start_polling()
-        self.tg.send("🟢 Bot wystartował i szuka ofert.\n\n" + start_text(self.s), silent=True)
+        self.tg.send("🟢 Bot wystartował i szuka ofert.\n\n" + start_text(self.s, self.tg.sources), silent=True)
         while True:
             try:
                 if time.time() - self.last_market > self.s.market_interval:
@@ -214,7 +222,7 @@ class Sniper:
             log.warning("Komendy Telegrama: %s", e)
         if not self.db.kv_get("welcomed"):
             self.tg.send("🟢 Bot działa na GitHubie (odpowiedzi na komendy przy każdym skanie).\n\n"
-                         + start_text(self.s), silent=True)
+                         + start_text(self.s, self.tg.sources), silent=True)
             self.db.kv_set("welcomed", True)
         if time.time() - self.last_market > self.s.market_interval:
             self.refresh_market()

@@ -197,7 +197,7 @@ def test_alert_format_and_commands(tmp_path):
     text = format_alert(l, r)
     assert "PEREŁKA" in text and "38 900 zł" in text and "Golf 7.5 R-Line" in text
     start = tg.command("/start", "")
-    for word in ("R-Line", "GTI", "GTD", "Highline", "Trendline", "7.5", "hatchback", "OLX", "Autoplac"):
+    for word in ("R-Line", "GTI", "GTD", "Highline", "Trendline", "7.5", "hatchback", "OLX", "OtoMoto"):
         assert word in start, word
     assert "Nie znam" in tg.command("/budzet", "42000")
     assert "wstrzymane" in tg.command("/pauza", "") and tg.paused

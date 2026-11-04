@@ -27,7 +27,8 @@ COMMANDS = """/start – ta wiadomość
 /pauza i /wznow – wstrzymanie alertów (💎 perełki przychodzą zawsze)"""
 
 
-def start_text(s: Settings) -> str:
+def start_text(s: Settings, sources: list[str] | None = None) -> str:
+    names = [SOURCES.get(x, x) for x in (sources or [k for k in SOURCES if k != "autoplac"])]
     return f"""🚗 <b>Golf 7 Sniper</b> – szukam dla Ciebie Golfa
 
 <b>Czego szukam</b>
@@ -46,7 +47,7 @@ def start_text(s: Settings) -> str:
 ⚠️ Golf R (300 KM) za te pieniądze = podejrzana oferta
 
 <b>Gdzie szukam</b>
-{", ".join(SOURCES.values())}
+{", ".join(names)}
 
 <b>Alerty</b>
 💎 perełka (80+ pkt) – dzwoń od razu
@@ -213,7 +214,7 @@ class Telegram:
 
     def command(self, cmd: str, arg: str) -> str:
         if cmd in ("/start", "/help", "/pomoc", "/komendy"):
-            return start_text(self.s)
+            return start_text(self.s, getattr(self, "sources", None))
         if cmd == "/pauza":
             self.paused = True; self.db.kv_set("paused", True)
             return "⏸ Alerty wstrzymane. 💎 Perełki dalej przychodzą. /wznow żeby włączyć."
