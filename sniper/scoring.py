@@ -191,8 +191,12 @@ def score_listing(l: Listing, model: MarketModel, s: Settings, *,
 
     tier = None
     if not blocking:
-        if score >= s.tier_pearl:
+        # przy niepewnej wycenie (mało danych) nie ogłaszamy "perełki" – najwyżej "okazję"
+        if score >= s.tier_pearl and conf != "niska":
             tier = "perelka"
+        elif score >= s.tier_pearl:
+            tier = "okazja"
+            flags.append("wycena niepewna – mało podobnych aut w bazie, porównaj cenę sam")
         elif score >= s.tier_deal:
             tier = "okazja"
         elif score >= s.tier_report:
