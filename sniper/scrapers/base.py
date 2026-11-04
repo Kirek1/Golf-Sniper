@@ -19,14 +19,38 @@ class ScraperError(Exception):
     pass
 
 
+try:  # łączy się jak prawdziwy Chrome – portale blokują "odcisk" zwykłych bibliotek Pythona
+    from curl_cffi import requests as chrome_requests
+except ImportError:  # pragma: no cover
+    chrome_requests = None
+
+
+class _ChromeClient:
+    """Ten sam interfejs co httpx.Client.get, ale przez curl_cffi z odciskiem Chrome."""
+
+    def __init__(self):
+        self.session = chrome_requests.Session(impersonate="chrome")
+        self.session.headers.update({"Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8"})
+
+    def get(self, url, params=None):
+        try:
+            return self.session.get(url, params=params, timeout=25, allow_redirects=True)
+        except Exception as e:  # noqa: BLE001 – ujednolicamy błędy sieci
+            raise httpx.TransportError(str(e)) from e
+
+
 class Http:
     """Jeden klient na portal, min. odstęp między zapytaniami + losowy jitter."""
 
     def __init__(self, min_delay: float = 2.5, max_delay: float = 6.0):
-        self.client = httpx.Client(
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "pl-PL,pl;q=0.9",
-                     "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"},
-            timeout=25, follow_redirects=True, http2=False)
+        if chrome_requests is not None:
+            self.client = _ChromeClient()
+        else:
+            log.warning("Brak curl_cffi – portale mogą zwracać 403. Zainstaluj: pip install curl_cffi")
+            self.client = httpx.Client(
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "pl-PL,pl;q=0.9",
+                         "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"},
+                timeout=25, follow_redirects=True, http2=False)
         self.min_delay, self.max_delay = min_delay, max_delay
         self._last = 0.0
 
@@ -48,6 +72,8 @@ class Http:
                 continue
             if r.status_code == 404:
                 return None
+            if r.status_code == 403:
+                raise ScraperError(f"HTTP 403 dla {url} – portal blokuje to połączenie")
             if r.status_code >= 400:
                 raise ScraperError(f"HTTP {r.status_code} dla {url}")
             return r.json() if as_json else r.text
