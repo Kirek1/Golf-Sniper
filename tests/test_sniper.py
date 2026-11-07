@@ -605,3 +605,13 @@ def test_photo_sent_when_available(monkeypatch, tmp_path):
     l = car(photo="https://ireland.apollo.olxcdn.com/v1/files/x/image;s=640x480")
     assert tg.send_alert(l, score_listing(l, market(), S))
     assert len(calls) == 1 and calls[0] != "TEKST"
+
+
+def test_old_leaked_kombi_cleaned_up(tmp_path):
+    db = DB(str(tmp_path / "c.db"))
+    db.upsert(car(listing_id="k1", detail_loaded=False), True)      # bez szczegółów → mogło być kombi
+    db.upsert(car(listing_id="k2", body="Kombi"), True)
+    db.upsert(car(listing_id="ok"), True)
+    assert db.cleanup_unverified(("otomoto",)) == 2
+    assert [r["listing_id"] for r in db.conn.execute("SELECT * FROM listings WHERE passes_filter=1")] == ["ok"]
+    assert db.cleanup_unverified(("otomoto",)) == 0                  # tylko raz

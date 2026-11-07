@@ -72,6 +72,7 @@ class Sniper:
         self.last_report_day = self.db.kv_get("last_report_day")
         self.detail_budget = 10_000
         self.geo = Geo(self.db, self.s.home_city) if self.s.home_city else None
+        self.db.cleanup_unverified(("otomoto", "sprzedajemy"))
         self.last_alive_check = 0.0
         self.last_disk_warning = 0.0   # limit pobrań szczegółów na jedno uruchomienie
 

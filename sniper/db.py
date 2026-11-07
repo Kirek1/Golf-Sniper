@@ -88,6 +88,23 @@ class DB:
             self.conn.commit()
             return {"new": False, "old_price": old}
 
+    def cleanup_unverified(self, sources: tuple[str, ...]) -> int:
+        """Jednorazowo: kandydaci z portali wymagających strony ogłoszenia, których szczegółów
+        nie udało się pobrać (stąd przeciekały kombi). Wrócą, jeśli pojawią się w nowym wyszukiwaniu."""
+        if self.kv_get("cleanup_2026_11_07"):
+            return 0
+        n = 0
+        with self.lock:
+            for r in self.conn.execute("SELECT key, source, data FROM listings WHERE passes_filter=1").fetchall():
+                d = json.loads(r["data"])
+                body = (d.get("body") or "").lower()
+                if (r["source"] in sources and not d.get("detail_loaded")) or "kombi" in body or "combi" in body:
+                    self.conn.execute("UPDATE listings SET passes_filter=0 WHERE key=?", (r["key"],))
+                    n += 1
+            self.conn.commit()
+        self.kv_set("cleanup_2026_11_07", True)
+        return n
+
     def save_data(self, l: Listing):
         with self.lock:
             self.conn.execute("UPDATE listings SET data=? WHERE key=?",
