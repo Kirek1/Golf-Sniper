@@ -36,6 +36,9 @@ Rozmawiaj z użytkownikiem **po polsku**, prostym językiem – nie jest program
 - Komendy z Telegrama są obsługiwane na początku każdego skanu (opóźnienie do kilkunastu minut).
 - 2026-11-04 (test z VPS): OtoMoto, OLX (strona wyników), Sprzedajemy i AutoScout24 działają; Autoplac zwraca 403, więc jest domyślnie wyłączony (`AUTOPLAC=1` włącza). Użytkownik nie chce widzieć ostrzeżeń o nieudanych skanach w /status – pokazujemy tylko ✅/⏸/⏳ i ⚠️ dopiero od 5 błędów. Http robi „rozgrzewkę” (wejście na stronę główną) i ponawia raz; po 3 blokadach z rzędu portal ma przerwę 24 h (`paused_sources` w kv) i jedną cichą informację na Telegramie.
 
+## Incydenty
+- 2026-11-07: dysk VPS (38 GB) zapełnił się w 100% – backup strony kirekreps (`npm run backup` z crona o 3:15, `scripts/backup.ts`) co noc kopiował całe `media` (8 GB) do `/var/lib/kirekreps/backups/` i nigdy nie kasował starych. Bot padał z `database or disk is full`. Naprawa: usunięte stare kopie, w crontabie użytkownika `ubuntu` po `npm run backup` dopisane `&& ls -1d /var/lib/kirekreps/backups/*/ | sort | head -n -1 | xargs -r rm -rf` (zostaje 1 kopia). Bot ostrzega na Telegramie, gdy wolnego miejsca < 3 GB, a /status pokazuje wolne miejsce.
+
 ## Do sprawdzenia / pomysły
 - Po każdej zmianie sprawdź w logach (`journalctl -u golf-sniper`) linijki „<Portal> strona 1: N ogłoszeń” dla wszystkich źródeł.
   Po 5 nieudanych skanach z rzędu bot sam wysyła ostrzeżenie.

@@ -423,3 +423,15 @@ def test_raport_lists_all_and_splits(tmp_path):
     tg.send(tg.command("/raport", ""))
     assert len(sent) >= 2 and all(len(t) <= 4096 for t in sent)
     assert "(40)" in sent[0] and "🔥" in sent[0]
+
+
+def test_disk_warning(tmp_path, monkeypatch):
+    from sniper import main as m
+    monkeypatch.setattr(m.settings, "db_path", str(tmp_path / "d.db"))
+    sn = m.Sniper(dry_run=True)
+    sent = []
+    sn.tg._call = lambda method, **p: sent.append(p.get("text", ""))
+    monkeypatch.setattr(m, "disk_free_gb", lambda path=".": 1.2)
+    sn.check_disk(); sn.check_disk()
+    assert len(sent) == 1 and "1.2 GB" in sent[0]          # raz, nie przy każdym skanie
+    assert "Wolne miejsce na serwerze: 1.2 GB" in sn.status()

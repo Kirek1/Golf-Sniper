@@ -8,8 +8,10 @@ Uruchomienie:
 from __future__ import annotations
 
 import argparse
+import shutil
 import gc
 import logging
+import os
 import random
 import time
 from datetime import datetime
@@ -27,6 +29,11 @@ from .scrapers.sprzedajemy import SprzedajemyScraper
 from .telegram import SOURCES, Telegram, start_text
 
 log = logging.getLogger("sniper")
+
+
+def disk_free_gb(path: str = ".") -> float:
+    st = shutil.disk_usage(path)
+    return st.free / 1024 ** 3
 
 
 def memory_mb() -> int:
@@ -60,10 +67,16 @@ class Sniper:
         self.model = MarketModel(self.db.market_rows())
         self.last_market = float(self.db.kv_get("last_market", 0))
         self.last_report_day = self.db.kv_get("last_report_day")
-        self.detail_budget = 10_000   # limit pobrań szczegółów na jedno uruchomienie
+        self.detail_budget = 10_000
+        self.last_disk_warning = 0.0   # limit pobrań szczegółów na jedno uruchomienie
 
     def status(self) -> str:
-        lines = [f"Wycena oparta na {self.model.size} ofertach", "", "<b>Portale</b>"]
+        lines = [f"Wycena oparta na {self.model.size} ofertach"]
+        try:
+            lines.append(f"Wolne miejsce na serwerze: {disk_free_gb(os.path.dirname(os.path.abspath(self.s.db_path)) or '.'):.1f} GB")
+        except OSError:
+            pass
+        lines += ["", "<b>Portale</b>"]
         paused = self.db.kv_get("paused_sources", {})
         for sc in self.scrapers:
             label = SOURCES.get(sc.name, sc.name)
@@ -188,6 +201,19 @@ class Sniper:
         self.db.kv_set("last_market", self.last_market)
         log.info("Model wyceny: %d ofert", self.model.size)
 
+    def check_disk(self):
+        """Ostrzeżenie, zanim pełny dysk zatrzyma bota (i stronę). Pamiętane w RAM-ie,
+        bo przy pełnym dysku nie da się nic zapisać do bazy."""
+        try:
+            free = disk_free_gb(os.path.dirname(os.path.abspath(self.s.db_path)) or ".")
+        except OSError:
+            return
+        if free < 3 and time.time() - self.last_disk_warning > 12 * 3600:
+            self.tg.send(f"💾 Na serwerze zostało tylko <b>{free:.1f} GB</b> wolnego miejsca. "
+                         "Gdy dysk się zapełni, bot (i strona) przestaną działać.\n"
+                         "Sprawdź: <code>df -h /</code> i <code>sudo du -xh / --max-depth=3 | sort -h | tail</code>")
+            self.last_disk_warning = time.time()
+
     def maybe_daily_report(self):
         now = datetime.now()
         day = now.strftime("%Y-%m-%d")
@@ -207,6 +233,7 @@ class Sniper:
                 gc.collect()
                 log.info("Skan zakończony, alertów: %d, pamięć: %d MB", n, memory_mb())
                 self.maybe_daily_report()
+                self.check_disk()
             except Exception:  # noqa: BLE001
                 log.exception("Nieoczekiwany błąd w pętli")
             time.sleep(self.s.poll_interval + random.randint(-40, 60))
