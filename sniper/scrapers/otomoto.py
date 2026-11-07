@@ -21,6 +21,11 @@ def search_params(s: Settings, page: int, market: bool) -> dict:
         "search[filter_float_year:to]": str(s.year_to),
         "search[order]": "created_at_first:desc",
         "search[advanced_search_expanded]": "true",
+        # Tylko hatchback 5d. W tytułach kombi często nie ma słowa "Variant", a lista wyników
+        # nie podaje nadwozia – bez tego filtra przeciekało ~475 kombi.
+        "search[filter_enum_body_type][0]": "compact",
+        "search[filter_enum_body_type][1]": "city-car",
+        "search[filter_enum_door_count][0]": "5",
     }
     if not market:  # tryb snajpera: tylko budżet z zapasem
         p["search[filter_float_price:to]"] = str(s.budget + s.budget_tolerance + 2000)
@@ -86,9 +91,11 @@ def parse_search(html: str) -> list[Listing]:
             created_at=d.get("createdAt"),
             extra={"version": pm.get("version__label") or "", "model": pm.get("model") or "golf"},
         )
-        seller = d.get("sellerLink") or d.get("seller") or {}
+        seller = d.get("seller") or {}            # __typename: PrivateSeller / ProfessionalSeller
         if isinstance(seller, dict):
-            st = str(seller.get("type") or seller.get("__typename") or "").lower()
+            st = str(seller.get("__typename") or seller.get("type") or "").lower()
+            if not st and d.get("sellerLink"):
+                st = "professional"                  # profil firmy = dealer
             l.seller_type = "firma" if ("dealer" in st or "professional" in st or "business" in st) else \
                 ("prywatny" if "private" in st or "privateseller" in st else None)
         enrich(l, pm.get("version__label"))
@@ -141,6 +148,7 @@ def parse_detail(html: str, l: Listing) -> Listing:
 class OtomotoScraper:
     name = "otomoto"
     sniper_pages, market_pages = 2, 5
+    needs_detail = True        # VIN, drzwi, nadwozie, ASO są dopiero na stronie ogłoszenia
 
     def __init__(self, settings: Settings):
         self.s = settings

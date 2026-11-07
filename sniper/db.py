@@ -36,6 +36,19 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def listed_since(created_at: str | None, first_seen: str | None) -> datetime:
+    """Kiedy ogłoszenie się pojawiło: data z portalu, a jak jej nie ma – kiedy bot je pierwszy raz zobaczył."""
+    for v in (created_at, first_seen):
+        if not v:
+            continue
+        try:
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return datetime.now(timezone.utc)
+
+
 class DB:
     def __init__(self, path: str):
         self.conn = sqlite3.connect(path, check_same_thread=False)
@@ -43,6 +56,10 @@ class DB:
         self.lock = threading.Lock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(listings)")}
+            for col, typ in (("removed_at", "TEXT"), ("last_check", "TEXT")):   # dopisane w nowszej wersji
+                if col not in cols:
+                    self.conn.execute(f"ALTER TABLE listings ADD COLUMN {col} {typ}")
             self.conn.commit()
 
     # --- ogłoszenia ---------------------------------------------------
@@ -70,6 +87,12 @@ class DB:
                 self.conn.execute("INSERT INTO price_history VALUES(?,?,?)", (l.key, ts, l.price_pln))
             self.conn.commit()
             return {"new": False, "old_price": old}
+
+    def save_data(self, l: Listing):
+        with self.lock:
+            self.conn.execute("UPDATE listings SET data=? WHERE key=?",
+                              (json.dumps(l.to_dict(), ensure_ascii=False), l.key))
+            self.conn.commit()
 
     def get(self, key: str) -> sqlite3.Row | None:
         with self.lock:
@@ -127,11 +150,76 @@ class DB:
                 (l.vin, l.key)).fetchall()
 
     def mark_inactive(self, older_than_hours: int = 24) -> int:
+        """Nie-kandydaci znikający z wyników. Kandydatów (passes_filter=1) sprawdzamy osobno,
+        wchodząc na ich stronę – skan widzi tylko pierwsze strony wyników."""
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
         with self.lock:
-            cur = self.conn.execute("UPDATE listings SET active=0 WHERE active=1 AND last_seen<?", (cutoff,))
+            cur = self.conn.execute(
+                "UPDATE listings SET active=0 WHERE active=1 AND passes_filter=0 AND last_seen<?", (cutoff,))
             self.conn.commit()
             return cur.rowcount
+
+    # --- czy ogłoszenie dalej wisi / ile wisiało ----------------------
+    def due_for_check(self, hours: int = 6, limit: int = 30) -> list[sqlite3.Row]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        with self.lock:
+            return self.conn.execute(
+                "SELECT * FROM listings WHERE passes_filter=1 AND active=1 "
+                "AND COALESCE(last_check, first_seen) < ? ORDER BY COALESCE(last_check, first_seen) LIMIT ?",
+                (cutoff, limit)).fetchall()
+
+    def mark_checked(self, key: str, alive: bool):
+        ts = now()
+        with self.lock:
+            if alive:
+                self.conn.execute("UPDATE listings SET last_check=? WHERE key=?", (ts, key))
+            else:
+                self.conn.execute("UPDATE listings SET last_check=?, active=0, removed_at=? WHERE key=?",
+                                  (ts, ts, key))
+            self.conn.commit()
+
+    def sold_days(self, l: Listing) -> list[float]:
+        """Ile dni wisiały podobne auta (rocznik ±1, przebieg ±30 tys.), które już zniknęły."""
+        if not l.year:
+            return []
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT data, first_seen, removed_at FROM listings WHERE removed_at IS NOT NULL "
+                "AND ABS(year-?)<=1 AND (? IS NULL OR ABS(mileage-?)<=30000)",
+                (l.year, l.mileage_km, l.mileage_km or 0)).fetchall()
+        out = []
+        for r in rows:
+            start = listed_since(json.loads(r["data"]).get("created_at"), r["first_seen"])
+            try:
+                end = datetime.fromisoformat(r["removed_at"])
+                out.append(max(0.0, (end - start).total_seconds() / 86400))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def previous_listing(self, l: Listing) -> sqlite3.Row | None:
+        """To samo auto wystawione wcześniej (ten sam VIN albo rocznik + moc + paliwo + skrzynia
+        + przebieg ±3 tys. km + to samo miasto)."""
+        with self.lock:
+            if l.vin:
+                r = self.conn.execute(
+                    "SELECT * FROM listings WHERE vin=? AND key<>? ORDER BY first_seen LIMIT 1",
+                    (l.vin, l.key)).fetchone()
+                if r:
+                    return r
+            if not (l.year and l.mileage_km and l.location):
+                return None
+            city = l.location.split(",")[0].strip().lower()
+            rows = self.conn.execute(
+                "SELECT * FROM listings WHERE key<>? AND year=? AND ABS(mileage-?)<=3000 "
+                "AND first_seen < datetime('now', '-1 day') ORDER BY first_seen LIMIT 20",
+                (l.key, l.year, l.mileage_km)).fetchall()
+        for r in rows:
+            d = json.loads(r["data"])
+            if (d.get("power_hp") == l.power_hp and d.get("fuel") == l.fuel and d.get("gearbox") == l.gearbox
+                    and (d.get("location") or "").split(",")[0].strip().lower() == city):
+                return r
+        return None
 
     def market_rows(self, days: int = 90) -> list[Listing]:
         """Wszystkie Golfy 7 hatchback z ostatnich dni (także droższe) – do wyceny."""

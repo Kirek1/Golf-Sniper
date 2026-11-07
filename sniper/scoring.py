@@ -151,13 +151,20 @@ def score_listing(l: Listing, model: MarketModel, s: Settings, *,
         flags.append("R-Line do potwierdzenia na zdjęciach")
     if l.facelift:
         eq += 2; plus.append("7.5")
-    if l.gearbox == "automat":
+    pref = getattr(s, "gearbox_pref", "")
+    if pref and l.gearbox == pref:
+        eq += 2                                   # skrzynia, której szukasz
+    elif not pref and l.gearbox == "automat":
         eq += 2
     eq_pts = min(10, eq)
 
     # 5) sprzedający (10)
     seller_pts = 5
-    if l.seller_type == "prywatny":
+    if l.seller_type == "handlarz":
+        seller_pts = 1
+        flags.append(f"„prywatny” sprzedawca ma {l.extra.get('seller_car_ads', 'wiele')} aut w ogłoszeniach – "
+                     "najpewniej handlarz")
+    elif l.seller_type == "prywatny":
         seller_pts = 9; plus.append("prywatny")
     elif l.seller_type == "firma":
         seller_pts = 5
@@ -183,9 +190,10 @@ def score_listing(l: Listing, model: MarketModel, s: Settings, *,
             flags.append(f"ten VIN był już wystawiany z większym przebiegiem ({other['mileage']:,} km)".replace(",", " "))
             blocking = True
             break
-    eng = l.engine_cc or 0
-    if l.fuel == "benzyna" and l.year and l.year <= 2014 and eng and eng < 1300:
-        flags.append("1.2 TSI z wczesnych roczników – sprawdź rozrząd i zużycie oleju")
+    prev = (l.extra.get("previous") or {})
+    if prev.get("mileage") and l.mileage_km and prev["mileage"] > l.mileage_km + 3000 and prev.get("same_vin"):
+        flags.append(f"wcześniej wystawione z większym przebiegiem ({prev['mileage']:,} km)".replace(",", " "))
+        blocking = True
 
     total = price_pts + km_pts + hist_pts + eq_pts + seller_pts + fresh_pts
     total -= 4 * len([f for f in flags if "do potwierdzenia" not in f])

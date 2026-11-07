@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import logging
 import threading
 import time
@@ -12,7 +13,9 @@ import httpx
 from .config import Settings
 from .db import DB
 from .models import Listing
+from .checklist import checklist
 from .scoring import Result
+from .scrapers.base import chrome_requests
 
 log = logging.getLogger("sniper.telegram")
 
@@ -30,6 +33,14 @@ COMMANDS = """/start – ta wiadomość
 
 def start_text(s: Settings, sources: list[str] | None = None) -> str:
     names = [SOURCES.get(x, x) for x in (sources or [k for k in SOURCES if k != "autoplac"])]
+    gear_line = {"manual": "skrzynia manualna (DSG tylko gdy to 💎 perełka)",
+                 "automat": "skrzynia automatyczna/DSG (manual tylko gdy to 💎 perełka)"}.get(
+        getattr(s, "gearbox_pref", ""), "manual i DSG")
+    dist_line = ""
+    if getattr(s, "home_city", ""):
+        dist_line = f"\n• odległość liczona od: {s.home_city}"
+        if getattr(s, "max_distance_km", 0):
+            dist_line += f" (do {s.max_distance_km} km, dalej tylko 💎)"
     return f"""🚗 <b>Golf 7 Sniper</b> – szukam dla Ciebie Golfa
 
 <b>Czego szukam</b>
@@ -37,7 +48,8 @@ def start_text(s: Settings, sources: list[str] | None = None) -> str:
 • tylko 5-drzwiowy hatchback
 • do {fmt_pln(s.budget)} (do {fmt_pln(s.budget + s.budget_tolerance)} przy „do negocjacji”)
 • przebieg do {fmt_km(s.max_mileage)} (7.5: do {fmt_km(s.max_mileage + 20000)})
-• benzyna i diesel, manual i DSG
+• benzyna i diesel
+• {gear_line}{dist_line}
 
 <b>Wersje</b>
 ⭐ R-Line – najwyższy priorytet
@@ -53,6 +65,8 @@ def start_text(s: Settings, sources: list[str] | None = None) -> str:
 <b>Alerty</b>
 💎 perełka (80+ pkt) – dzwoń od razu
 🔥 okazja (65+ pkt) – warto obejrzeć
+Każdy alert ma zdjęcie i przycisk 📋 „Co sprawdzić przy oględzinach”.
+Bot ostrzega przed handlarzami udającymi osoby prywatne i autami wystawianymi ponownie.
 📋 raport dzienny o {s.daily_report_hour}:00
 
 <b>Komendy</b>
@@ -67,7 +81,12 @@ def fmt_km(v: int | None) -> str:
     return "? km" if v is None else f"{v:,}".replace(",", " ") + " km"
 
 
-def format_alert(l: Listing, r: Result, *, price_drop: int | None = None) -> str:
+def _plain_len(text: str) -> int:
+    return len(html.unescape(re.sub(r"<[^>]+>", "", text)))
+
+
+def format_alert(l: Listing, r: Result, *, price_drop: int | None = None, limit: int = 1000) -> str:
+    """Treść alertu. Mieści się w podpisie zdjęcia (Telegram: max 1024 znaki)."""
     e = html.escape
     head = TIER_HEAD.get(r.tier or "raport", "👀")
     version = "7.5" if l.facelift else "7"
@@ -75,50 +94,87 @@ def format_alert(l: Listing, r: Result, *, price_drop: int | None = None) -> str
     engine = ""
     if l.engine_cc:
         engine = f"{l.engine_cc / 1000:.1f} {'TDI' if l.fuel == 'diesel' else 'TSI'}"
-    parts = [f"Golf {version}", trim, engine,
-             "DSG" if l.gearbox == "automat" else ""]
-    name = " ".join(p for p in parts if p)
-    lines = [
-        f"<b>{head} · {r.score}/100</b>",
-        f"<b>{e(name)}</b> · {l.year or '?'} · {fmt_km(l.mileage_km)}",
-        f"<i>{e(l.title[:90])}</i>",
-        "",
-    ]
-    price_line = f"💰 <b>{fmt_pln(l.price_pln)}</b>"
-    if l.extra.get("import") and l.extra.get("price_eur"):
-        eur = f"{int(l.extra['price_eur']):,}".replace(",", " ")
-        price_line += f" (auto {eur} € + szac. koszty sprowadzenia)"
+    gear = "DSG" if l.gearbox == "automat" else ("manual" if l.gearbox == "manual" else "")
+    name = " ".join(p for p in (f"Golf {version}", trim, engine, gear) if p)
+    x = l.extra
+
+    top = [f"<b>{head} · {r.score}/100</b>",
+           f"<b>{e(name)}</b> · {l.year or '?'} · {fmt_km(l.mileage_km)}"]
+    price = f"💰 <b>{fmt_pln(l.price_pln)}</b>"
+    if x.get("import") and x.get("price_eur"):
+        price += f" (auto {int(x['price_eur']):,} € + sprowadzenie)".replace(",", " ")
     if l.negotiable:
-        price_line += " (do negocjacji)"
+        price += " · do negocjacji"
+    top.append(price)
     if r.expected:
         sign = "−" if (r.diff_pct or 0) >= 0 else "+"
-        price_line += f"\n📊 rynek ~{fmt_pln(r.expected)} ({sign}{abs(r.diff_pct or 0):.0%})"
-        price_line += f" · pewność wyceny: {r.confidence}"
-        if r.similar:
-            price_line += f", {r.similar} podobnych"
-    lines.append(price_line)
+        top.append(f"📊 rynek ~{fmt_pln(r.expected)} ({sign}{abs(r.diff_pct or 0):.0%}) · wycena {r.confidence}")
     if price_drop:
-        lines.append(f"📉 obniżka o {fmt_pln(price_drop)}")
-    meta = [x for x in (l.fuel, f"{l.power_hp} KM" if l.power_hp else None,
-                        l.seller_type, l.location) if x]
-    lines.append("ℹ️ " + e(" · ".join(meta)))
-    if r.plus:
-        lines.append("✅ " + e(" · ".join(r.plus)))
-    for f in r.flags:
-        lines.append("⚠️ " + e(f))
-    if l.vin:
-        lines.append(f"🔎 VIN: <code>{e(l.vin)}</code>")
-    lines.append(f"\n<a href=\"{e(l.url)}\">Otwórz ogłoszenie – {SOURCES.get(l.source, l.source)}</a>")
-    return "\n".join(lines)
+        top.append(f"📉 obniżka o {fmt_pln(price_drop)}")
+
+    where = l.location or "?"
+    if x.get("distance_km") is not None:
+        where += f" · ~{x['distance_km']} km od Ciebie"
+    top.append("📍 " + e(where))
+    seller = {"prywatny": "prywatny", "firma": "firma", "handlarz": "handlarz ⚠️"}.get(l.seller_type or "", "?")
+    meta = [x2 for x2 in (l.fuel, f"{l.power_hp} KM" if l.power_hp else None, seller) if x2]
+    top.append("ℹ️ " + e(" · ".join(meta)))
+
+    when = []
+    if x.get("listed_days") is not None:
+        d = x["listed_days"]
+        when.append("wystawione dziś" if d < 1 else f"wisi {d:.0f} dni")
+    if x.get("sold_days_median") is not None:
+        when.append(f"podobne znikały po ~{x['sold_days_median']:.0f} dniach")
+    if when:
+        top.append("📅 " + " · ".join(when))
+    prev = x.get("previous")
+    if prev:
+        ago = f"{prev['days_ago']:.0f} dni temu" if prev.get("days_ago") else "wcześniej"
+        what = "też wystawione" if prev.get("active") else "♻️ wystawiane już"
+        top.append(f"{what} na {e(prev['source'])} {ago} za {fmt_pln(prev.get('price'))}")
+
+    flags = ["⚠️ " + e(f) for f in r.flags]
+    plus = ["✅ " + e(" · ".join(r.plus))] if r.plus else []
+    vin = [f"🔎 VIN: <code>{e(l.vin)}</code>"] if l.vin else []
+    link = [f"<a href=\"{e(l.url)}\">Otwórz ogłoszenie – {SOURCES.get(l.source, l.source)}</a>"]
+
+    # skracamy od najmniej ważnych, aż zmieści się w podpisie zdjęcia
+    while True:
+        text = "\n".join(top + plus + flags + vin + [""] + link)
+        if _plain_len(text) <= limit:
+            return text
+        if plus:
+            plus = []
+        elif len(flags) > 2:
+            flags = flags[:2]
+        elif vin:
+            vin = []
+        else:
+            return text[:limit]
 
 
 def alert_keyboard(l: Listing) -> dict:
     rows = [[{"text": "⭐ Interesuje mnie", "callback_data": f"fav|{l.key}"[:64]},
-             {"text": "🙈 Ignoruj", "callback_data": f"ign|{l.key}"[:64]}]]
-    if l.vin:
-        rows.append([{"text": "Historia pojazdu (gov.pl)",
-                      "url": "https://historiapojazdu.gov.pl/"}])
+             {"text": "🙈 Ignoruj", "callback_data": f"ign|{l.key}"[:64]}],
+            [{"text": "📋 Co sprawdzić przy oględzinach", "callback_data": f"chk|{l.key}"[:64]}]]
     return {"inline_keyboard": rows}
+
+
+def fetch_photo(url: str | None) -> bytes | None:
+    """Zdjęcie do alertu (do 8 MB). Bez zdjęcia alert idzie jako zwykły tekst."""
+    if not url:
+        return None
+    try:
+        if chrome_requests is not None:
+            r = chrome_requests.get(url, impersonate="chrome", timeout=15)
+        else:
+            r = httpx.get(url, timeout=15, follow_redirects=True)
+        if r.status_code == 200 and 1000 < len(r.content) < 8_000_000:
+            return r.content
+    except Exception as e:  # noqa: BLE001
+        log.debug("Zdjęcie %s: %s", url, e)
+    return None
 
 
 class Telegram:
@@ -170,9 +226,29 @@ class Telegram:
     def send_alert(self, l: Listing, r: Result, price_drop: int | None = None):
         if self.paused and r.tier != "perelka":
             return False
-        self.send(format_alert(l, r, price_drop=price_drop), alert_keyboard(l),
-                  silent=(r.tier == "raport"))
+        text = format_alert(l, r, price_drop=price_drop)
+        kb = alert_keyboard(l)
+        silent = r.tier == "raport"
+        photo = None if self.dry_run else fetch_photo(l.photo)
+        if photo and self._send_photo(photo, text, kb, silent):
+            return True
+        self.send(text, kb, silent=silent)
         return True
+
+    def _send_photo(self, photo: bytes, caption: str, keyboard: dict, silent: bool) -> bool:
+        try:
+            r = self.client.post(f"{self.api}/sendPhoto",
+                                 data={"chat_id": self.s.telegram_chat_id, "caption": caption,
+                                       "parse_mode": "HTML", "disable_notification": str(silent).lower(),
+                                       "reply_markup": json.dumps(keyboard)},
+                                 files={"photo": ("auto.jpg", photo)})
+            ok = r.json().get("ok")
+            if not ok:
+                log.warning("Zdjęcie nie poszło (%s) – wysyłam sam tekst", r.json().get("description"))
+            return bool(ok)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Zdjęcie nie poszło (%s) – wysyłam sam tekst", e)
+            return False
 
     # --- komendy ------------------------------------------------------
     def start_polling(self):
@@ -211,6 +287,13 @@ class Telegram:
             if str(cq["message"]["chat"]["id"]) != str(self.s.telegram_chat_id):
                 return
             action, key = cq["data"].split("|", 1)
+            if action == "chk":
+                l = self.db.listing(key)
+                self._call("answerCallbackQuery", callback_query_id=cq["id"])
+                if l:
+                    head = f"📋 <b>Co sprawdzić – {html.escape(l.title[:60])}</b>\n\n"
+                    self.send(head + checklist(l))
+                return
             self.db.set_user_status(key, "fav" if action == "fav" else "ignore")
             self._call("answerCallbackQuery", callback_query_id=cq["id"],
                        text="Dodano do ulubionych ⭐" if action == "fav" else "Nie pokażę więcej")

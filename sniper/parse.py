@@ -156,7 +156,7 @@ def is_golf7_hatch_5d(l: Listing) -> tuple[bool, str]:
     if l.year and not (2012 <= l.year <= 2021):
         return False, "rocznik poza Golfem 7"
     body = (l.body or "").lower()
-    if any(b in body for b in ("kombi", "estate", "minivan", "kabrio", "cabrio", "suv")):
+    if any(b in body for b in ("kombi", "combi", "estate", "minivan", "kabrio", "cabrio", "suv", "van")):
         return False, "nadwozie nie hatchback"
     if NOT_HATCH_RE.search(l.title) or NOT_HATCH_RE.search(l.extra.get("version") or ""):
         return False, "nadwozie nie hatchback"

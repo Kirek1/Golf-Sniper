@@ -36,6 +36,16 @@ Rozmawiaj z użytkownikiem **po polsku**, prostym językiem – nie jest program
 - Komendy z Telegrama są obsługiwane na początku każdego skanu (opóźnienie do kilkunastu minut).
 - 2026-11-04 (test z VPS): OtoMoto, OLX (strona wyników), Sprzedajemy i AutoScout24 działają; Autoplac zwraca 403, więc jest domyślnie wyłączony (`AUTOPLAC=1` włącza). Użytkownik nie chce widzieć ostrzeżeń o nieudanych skanach w /status – pokazujemy tylko ✅/⏸/⏳ i ⚠️ dopiero od 5 błędów. Http robi „rozgrzewkę” (wejście na stronę główną) i ponawia raz; po 3 blokadach z rzędu portal ma przerwę 24 h (`paused_sources` w kv) i jedną cichą informację na Telegramie.
 
+## Usprawnienia 2026-11-07 (na prośbę użytkownika)
+- OtoMoto: w URL filtr `filter_enum_body_type` = compact + city-car i `filter_enum_door_count`=5 – kombi w tytule często nie ma „Variant” (przeciekało ~475). Typ sprzedawcy z `seller.__typename` (PrivateSeller/ProfessionalSeller).
+- `needs_detail` (OtoMoto, Sprzedajemy): bez strony ogłoszenia nie ma alertu.
+- `GEARBOX=manual` (użytkownik szuka manuala): DSG tylko jako 💎, manual +2 pkt.
+- Zdjęcie w alercie (`sendPhoto`, podpis ≤1024 znaki, zapas: sam tekst); przycisk 📋 ze ściągą (`checklist.py`).
+- Odległość (`geo.py`): OLX ma lat/lon, reszta – Nominatim z cache w kv; `HOME_CITY`, `MAX_DISTANCE_KM` (dalej tylko 💎). **Użytkownik jeszcze nie podał miasta.**
+- Handlarze na OLX: profil `/oferty/uzytkownik/<base62(user.id)>/` → `is_business` lub ≥3 aut = „handlarz” (cache 3 dni).
+- Czas na rynku: co godzinę `check_alive` dla do 30 kandydatów (404/przekierowanie/konkretne komunikaty) → `removed_at`; alert pokazuje „wisi X dni” i „podobne znikały po ~N dniach”. Ogólny zwrot „nie jest już dostępna” jest w kodzie każdej strony OLX – nie używać.
+- Ponowne wystawienia: `db.previous_listing` (VIN albo rocznik+moc+paliwo+skrzynia+przebieg±3k+miasto) → ♻️ w alercie; mniejszy przebieg przy tym samym VIN blokuje alert.
+
 ## Incydenty
 - 2026-11-07: dysk VPS (38 GB) zapełnił się w 100% – backup strony kirekreps (`npm run backup` z crona o 3:15, `scripts/backup.ts`) co noc kopiował całe `media` (8 GB) do `/var/lib/kirekreps/backups/` i nigdy nie kasował starych. Bot padał z `database or disk is full`. Naprawa: usunięte stare kopie, w crontabie użytkownika `ubuntu` po `npm run backup` dopisane `&& ls -1d /var/lib/kirekreps/backups/*/ | sort | head -n -1 | xargs -r rm -rf` (zostaje 1 kopia). Bot ostrzega na Telegramie, gdy wolnego miejsca < 3 GB, a /status pokazuje wolne miejsce.
 

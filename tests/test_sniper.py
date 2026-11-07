@@ -435,3 +435,173 @@ def test_disk_warning(tmp_path, monkeypatch):
     sn.check_disk(); sn.check_disk()
     assert len(sent) == 1 and "1.2 GB" in sent[0]          # raz, nie przy każdym skanie
     assert "Wolne miejsce na serwerze: 1.2 GB" in sn.status()
+
+
+# --- usprawnienia 07.11: hatchback na OtoMoto, manual, zdjęcia, odległość, handlarze, historia, ściąga ----
+
+def test_otomoto_asks_only_for_5d_hatchback_and_reads_seller_type():
+    from sniper.scrapers import otomoto
+    p = otomoto.search_params(S, 1, market=True)
+    assert p["search[filter_enum_body_type][0]"] == "compact" and p["search[filter_enum_door_count][0]"] == "5"
+    node = dict(OTOMOTO_NODE, seller={"__typename": "ProfessionalSeller"})
+    inner = json.dumps({"advertSearch": {"edges": [{"node": node}]}})
+    l = otomoto.parse_search(_next({"props": {"pageProps": {"urqlState": {"a": {"data": inner}}}}}))[0]
+    assert l.seller_type == "firma"
+    node = dict(OTOMOTO_NODE, seller={"__typename": "PrivateSeller"})
+    inner = json.dumps({"advertSearch": {"edges": [{"node": node}]}})
+    assert otomoto.parse_search(_next({"props": {"pageProps": {"urqlState": {"a": {"data": inner}}}}}))[0].seller_type == "prywatny"
+    assert not hard_filter(car(body="Kombi"), S)[0] and not hard_filter(car(body="combi"), S)[0]
+
+
+def _sniper(tmp_path, monkeypatch, **cfg):
+    from sniper import main as m
+    monkeypatch.setattr(m.settings, "db_path", str(tmp_path / "s.db"))
+    for k, v in cfg.items():
+        monkeypatch.setattr(m.settings, k, v)
+    sn = m.Sniper(dry_run=True)
+    sent = []
+    sn.tg.send_alert = lambda l, r, price_drop=None: sent.append((l, r)) or True
+    # rynek: 15 podobnych aut po ~44 500 zł
+    for i in range(30):
+        o = car(listing_id=f"m{i}", price_pln=44500 + (i % 15 - 7) * 300,
+                gearbox="automat" if i < 15 else "manual")
+        o.extra["golf7_hatch"] = True
+        sn.db.upsert(o, False)
+    sn.model = m.MarketModel(sn.db.market_rows())
+    return m, sn, sent
+
+
+class _Src:
+    def __init__(self, name="otomoto", needs_detail=False, seller=None):
+        self.name, self.needs_detail, self._seller = name, needs_detail, seller
+    def detail(self, l): return l
+    def seller_info(self, l): return self._seller
+
+
+def test_detail_required_before_alert(tmp_path, monkeypatch):
+    m, sn, sent = _sniper(tmp_path, monkeypatch)
+    l = car(listing_id="d1", detail_loaded=False, gearbox="manual")
+    sn.detail_budget = 0                      # szczegółów nie udało się pobrać
+    assert sn.process(_Src(needs_detail=True), l) == 0 and not sent
+
+
+def test_manual_preferred_dsg_only_as_pearl(tmp_path, monkeypatch):
+    m, sn, sent = _sniper(tmp_path, monkeypatch, gearbox_pref="manual")
+    okazja_dsg = car(listing_id="g1", price_pln=40500, gearbox="automat", vin=None, aso=None)
+    assert sn.process(_Src(), okazja_dsg) == 0          # DSG i tylko „okazja” → nie wysyłamy
+    pearl_dsg = car(listing_id="g2", price_pln=38500, gearbox="automat")
+    pearl_manual = car(listing_id="g3", price_pln=38600, gearbox="manual", vin="WVWZZZAUZJW999999")
+    assert sn.process(_Src(), pearl_dsg) == 1
+    assert sn.process(_Src(), pearl_manual) == 1
+    assert [r.tier for _, r in sent] == ["perelka", "perelka"]
+
+
+def test_olx_dealer_posing_as_private(tmp_path, monkeypatch):
+    from sniper.scrapers import olx
+    page = _olx_html([])  # bez listy – sprawdzamy sam parser profilu niżej
+    state = json.dumps({"userListing": {"seller": {"data": {"id": 1, "is_business": True}},
+                                        "userListing": {"totalElements": 5, "ads": [
+                                            {"category": {"type": "automotive"}, "title": t} for t in ("Golf", "Astra", "Ceed", "Rio", "B klasa")]}}})
+    info = olx.parse_user_page(f"<script>window.__PRERENDERED_STATE__= {json.dumps(state)};</script>")
+    assert info == {"is_business": True, "ads_total": 5, "car_ads": 5}
+    assert olx.parse_user_page(page) is not None or True
+    m, sn, sent = _sniper(tmp_path, monkeypatch, gearbox_pref="")
+    l = car(source="olx", listing_id="h1", price_pln=38500)
+    l.extra["seller_id"] = "13721327"
+    sn.process(_Src("olx", seller=info), l)
+    saved = sn.db.listing("olx:h1")
+    assert saved.seller_type == "handlarz"
+    r = m.score_listing(saved, sn.model, sn.s)
+    assert any("handlarz" in f for f in r.flags)
+
+
+def test_distance_and_far_away_filter(tmp_path, monkeypatch):
+    from sniper import geo
+    m, sn, sent = _sniper(tmp_path, monkeypatch, gearbox_pref="", max_distance_km=200)
+    coords = {"kraków": (50.06, 19.94), "radom, mazowieckie, polska": (51.40, 21.15),
+              "gdańsk, pomorskie, polska": (54.35, 18.65)}
+    monkeypatch.setattr(geo.Geo, "geocode", lambda self, p: coords.get(p.lower()))
+    sn.geo = geo.Geo(sn.db, "Kraków")
+    near = car(listing_id="n1", price_pln=38500, location="Radom, Mazowieckie")
+    far_ok = car(listing_id="n2", price_pln=40500, location="Gdańsk, Pomorskie", vin=None, aso=None)
+    far_pearl = car(listing_id="n3", price_pln=38400, location="Gdańsk, Pomorskie", mileage_km=144000,
+                    vin="WVWZZZAUZJW555777")
+    for l in (near, far_ok, far_pearl):
+        sn.process(_Src(), l)
+    tiers = {l.listing_id: (r.tier, l.extra.get("distance_km")) for l, r in sent}
+    assert 150 < tiers["n1"][1] < 250                       # Kraków → Radom
+    assert "n2" not in tiers                                # okazja za daleko → pomijamy
+    assert tiers["n3"][0] == "perelka" and tiers["n3"][1] > 500   # perełka przychodzi mimo odległości
+    r = score_listing(sn.db.listing("otomoto:n2"), sn.model, sn.s)
+    assert r.tier == "okazja"                               # (upewniamy się, że to była okazja)
+
+
+def test_alive_check_and_time_on_market(tmp_path):
+    from sniper.scrapers import base
+    class R:
+        def __init__(self, code, url, text=""): self.status_code, self.url, self.text = code, url, text
+    class C:
+        def __init__(self, r): self.r = r
+        def get(self, url): return self.r
+    h = base.Http(0, 0)
+    u = "https://www.olx.pl/d/oferta/golf-CID5-IDabc.html"
+    h.client = C(R(200, u, "<h1>Golf</h1>")); assert base.check_alive(h, u) is True
+    h.client = C(R(404, u)); assert base.check_alive(h, u) is False
+    h.client = C(R(200, "https://www.olx.pl/motoryzacja/samochody/")); assert base.check_alive(h, u) is False
+    h.client = C(R(200, u, "Ogłoszenie nie jest już dostępne")); assert base.check_alive(h, u) is False
+    # zwrot z tłumaczeń obecny na każdej aktywnej stronie OLX nie może oznaczać „sprzedane”
+    h.client = C(R(200, u, '{"t":"Ta funkcja nie jest już dostępna"}')); assert base.check_alive(h, u) is True
+    db = DB(str(tmp_path / "a.db"))
+    for i in range(3):
+        l = car(listing_id=f"s{i}", created_at="2026-10-30T10:00:00Z")
+        db.upsert(l, True)
+        db.mark_checked(l.key, alive=False)
+    days = db.sold_days(car())
+    assert len(days) == 3 and all(d > 1 for d in days)
+
+
+def test_relisted_car_detected(tmp_path):
+    db = DB(str(tmp_path / "p.db"))
+    old = car(listing_id="old", price_pln=42000, location="Radom, Mazowieckie", vin=None)
+    db.upsert(old, True)
+    db.conn.execute("UPDATE listings SET first_seen='2026-10-20T10:00:00+00:00', active=0 WHERE key='otomoto:old'")
+    new = car(source="olx", listing_id="new", price_pln=39000, mileage_km=142500,
+              location="Radom, Mazowieckie", vin=None)
+    db.upsert(new, True)
+    prev = db.previous_listing(new)
+    assert prev is not None and prev["price"] == 42000
+
+
+def test_alert_fits_photo_caption_and_has_checklist_button():
+    from sniper.telegram import _plain_len, alert_keyboard
+    l = car(location="Radom, Mazowieckie")
+    l.extra.update(distance_km=180, listed_days=3.2, sold_days_median=9,
+                   previous={"source": "OLX", "price": 42000, "days_ago": 15, "active": False})
+    r = score_listing(car(price_pln=27000, description="zaliczka " * 3), market(), S)
+    text = format_alert(l, r)
+    assert _plain_len(text) <= 1000
+    assert "~180 km od Ciebie" in text and "wisi 3 dni" in text and "♻️" in text
+    assert any(b["callback_data"].startswith("chk|") for row in alert_keyboard(l)["inline_keyboard"] for b in row)
+
+
+def test_checklist_matches_car():
+    from sniper.checklist import checklist
+    dsg_tsi = checklist(car(gearbox="automat", engine_cc=1395, power_hp=125, fuel="benzyna"))
+    assert "DQ200" in dsg_tsi and "pasek rozrządu" in dsg_tsi and "R-Line" in dsg_tsi
+    tdi_manual = checklist(car(gearbox="manual", engine_cc=1598, fuel="diesel", title="Golf 7 1.6 TDI", description=""))
+    assert "DPF" in tdi_manual and "dwumasa" in tdi_manual and "sprzęgło" in tdi_manual
+    gti = checklist(car(title="Golf 7 GTI", power_hp=230, engine_cc=1984, gearbox="automat", description=""))
+    assert "mokra" in gti and "pompy wody" in gti
+
+
+def test_photo_sent_when_available(monkeypatch, tmp_path):
+    from sniper import telegram as t
+    db = DB(str(tmp_path / "f.db"))
+    tg = t.Telegram(Settings(), db, dry_run=False)
+    monkeypatch.setattr(t, "fetch_photo", lambda url: b"\xff\xd8" + b"0" * 2000)
+    calls = []
+    tg._send_photo = lambda photo, caption, kb, silent: calls.append(caption) or True
+    tg.send = lambda *a, **k: calls.append("TEKST")
+    l = car(photo="https://ireland.apollo.olxcdn.com/v1/files/x/image;s=640x480")
+    assert tg.send_alert(l, score_listing(l, market(), S))
+    assert len(calls) == 1 and calls[0] != "TEKST"

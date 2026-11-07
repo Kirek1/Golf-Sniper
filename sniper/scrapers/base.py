@@ -128,3 +128,39 @@ def walk(obj):
                 stack.append(json.loads(cur))
             except ValueError:
                 pass
+
+
+# Tylko konkretne komunikaty. Ogólne zwroty typu „nie jest już dostępna” siedzą w kodzie KAŻDEJ
+# strony OLX (tłumaczenia) – sprawdzone 07.11.2026 – i dawały fałszywe „sprzedane”.
+GONE_PHRASES = (
+    "ogłoszenie nieaktualne", "ogłoszenie jest nieaktualne", "ogłoszenie nie jest już dostępne",
+    "ogłoszenie zostało zakończone", "ogłoszenie wygasło", "ogłoszenie zakończone",
+    "to ogłoszenie jest nieaktywne", "oferta wygasła", "oferta nieaktualna",
+    "ogłoszenie zostało usunięte", "listing is no longer", "angebot ist nicht mehr verfügbar",
+)
+
+
+def _path(u: str) -> str:
+    return u.split("?")[0].split("#")[0].rstrip("/").split("://")[-1].removeprefix("www.")
+
+
+def check_alive(http: "Http", url: str) -> bool | None:
+    """True – ogłoszenie wisi, False – zniknęło (sprzedane/usunięte), None – nie wiadomo (błąd sieci)."""
+    wait = http._last + random.uniform(http.min_delay, http.max_delay) - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    http._last = time.monotonic()
+    try:
+        r = http.client.get(url)
+    except Exception as e:  # noqa: BLE001
+        log.debug("Sprawdzanie %s: %s", url, e)
+        return None
+    if r.status_code in (404, 410):
+        return False
+    if r.status_code >= 400:
+        return None
+    final = str(getattr(r, "url", url))
+    if _path(final) != _path(url):
+        return False                    # przekierowanie na listę wyników zamiast na ogłoszenie
+    text = (r.text or "")[:400_000].lower()
+    return not any(p in text for p in GONE_PHRASES)

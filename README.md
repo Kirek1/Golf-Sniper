@@ -13,7 +13,7 @@ na tle rynku i wysyła na Telegram tylko te warte telefonu.
 ## Skąd bierze oferty
 | Portal | Jak | Uwagi |
 |---|---|---|
-| OtoMoto | strona wyników + ogłoszenie (VIN, ASO, drzwi) | największe źródło |
+| OtoMoto | strona wyników (filtr: Kompakt/miejskie, 5 drzwi) + ogłoszenie (VIN, ASO) | największe źródło |
 | OLX | dane ze strony wyników | ogłoszenia przekierowujące na OtoMoto są pomijane |
 | Autoplac | dane ze strony wyników | blokuje serwery (403) – domyślnie wyłączony, włączysz `AUTOPLAC=1` w `.env` |
 | Sprzedajemy | lista + strona ogłoszenia | |
@@ -58,6 +58,15 @@ Aktualizacja: `cd ~/golf-sniper && git pull && .venv/bin/pip install -r requirem
 Logi: `sudo journalctl -u golf-sniper -n 50 --no-pager`
 
 ## Telegram
+Każdy alert ma **zdjęcie**, odległość od Ciebie, ile ogłoszenie już wisi, informację, czy auto było
+wcześniej wystawiane (♻️), ostrzeżenie przed handlarzem udającym osobę prywatną oraz przycisk
+**📋 Co sprawdzić przy oględzinach** (ściąga dopasowana do silnika i skrzyni).
+
+Ustawienia w `.env`:
+- `GEARBOX=manual` – szukasz manuala; DSG przychodzi tylko jako 💎 perełka (`automat` odwrotnie, puste = obojętnie)
+- `HOME_CITY=Kraków` – od tego miasta liczona jest odległość
+- `MAX_DISTANCE_KM=250` – dalej przychodzą tylko 💎 perełki (0 = bez limitu)
+
 Na starcie bot wysyła wiadomość z opisem, czego szuka. Komendy:
 `/start` (to samo jeszcze raz), `/status`, `/raport`, `/ulubione`, `/pauza`, `/wznow`.
 

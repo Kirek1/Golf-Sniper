@@ -84,6 +84,12 @@ def parse_ad(ad: dict) -> Listing:
         detail_loaded=True,      # lista OLX zawiera pełny opis i parametry
         extra={"model": norm("model") or val("model") or "", "version": ""},
     )
+    mp = ad.get("map") or {}
+    if mp.get("lat") and mp.get("lon"):
+        l.extra["lat"], l.extra["lon"] = float(mp["lat"]), float(mp["lon"])
+    user = ad.get("user") or {}
+    if user.get("id"):
+        l.extra["seller_id"] = str(user["id"])
     vin = norm("vin") or val("vin")
     if vin:
         l.vin = str(vin).strip()
@@ -139,6 +145,35 @@ def parse_offers(payload: dict) -> list[Listing]:
     return out
 
 
+B62 = "0123456789abcdefghijklmnopqrstuvwxyz" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def short_user_id(n: int) -> str:
+    """Krótki identyfikator profilu w adresie /oferty/uzytkownik/<id>/ (base62 z numeru użytkownika)."""
+    s = ""
+    while n:
+        n, r = divmod(n, 62)
+        s = B62[r] + s
+    return s or "0"
+
+
+def parse_user_page(html: str) -> dict | None:
+    """Profil sprzedawcy: czy OLX oznacza go jako firmę i ile ma ogłoszeń (w tym aut)."""
+    m = STATE_RE.search(html or "")
+    if not m:
+        return None
+    st = json.loads(json.loads(m.group(1)))
+    ul = st.get("userListing") or {}
+    seller = ((ul.get("seller") or {}).get("data")) or {}
+    listing = ul.get("userListing") or {}
+    ads = listing.get("ads") or []
+    return {
+        "is_business": bool(seller.get("is_business")),
+        "ads_total": int(listing.get("totalElements") or len(ads)),
+        "car_ads": sum(1 for a in ads if (a.get("category") or {}).get("type") == "automotive"),
+    }
+
+
 class OlxScraper:
     name = "olx"
     sniper_pages, market_pages = 2, 4
@@ -160,3 +195,17 @@ class OlxScraper:
 
     def detail(self, l: Listing) -> Listing:
         return l
+
+    def seller_info(self, l: Listing) -> dict | None:
+        """Ile ogłoszeń ma "prywatny" sprzedawca. 3+ auta = najpewniej handlarz."""
+        uid = l.extra.get("seller_id")
+        if not uid:
+            return None
+        html = self.http.get(f"https://www.olx.pl/oferty/uzytkownik/{short_user_id(int(uid))}/")
+        info = parse_user_page(html or "")
+        if info is None:                      # nietypowy identyfikator – weź link ze strony ogłoszenia
+            page = self.http.get(l.url) or ""
+            m = re.search(r"/oferty/uzytkownik/([A-Za-z0-9]+)/", page)
+            if m:
+                info = parse_user_page(self.http.get(f"https://www.olx.pl/oferty/uzytkownik/{m.group(1)}/") or "")
+        return info

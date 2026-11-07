@@ -12,15 +12,18 @@ import shutil
 import gc
 import logging
 import os
+import json
 import random
+import statistics
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .config import settings
-from .db import DB, TIER_RANK
+from .db import DB, TIER_RANK, listed_since
+from .geo import Geo
 from .parse import enrich, hard_filter, is_golf7_hatch_5d
 from .scoring import MarketModel, score_listing
-from .scrapers.base import BlockedError, ScraperError
+from .scrapers.base import BlockedError, ScraperError, check_alive
 from .scrapers.autoplac import AutoplacScraper
 from .scrapers.autoscout24 import AutoScout24Scraper
 from .scrapers.olx import OlxScraper
@@ -68,6 +71,8 @@ class Sniper:
         self.last_market = float(self.db.kv_get("last_market", 0))
         self.last_report_day = self.db.kv_get("last_report_day")
         self.detail_budget = 10_000
+        self.geo = Geo(self.db, self.s.home_city) if self.s.home_city else None
+        self.last_alive_check = 0.0
         self.last_disk_warning = 0.0   # limit pobrań szczegółów na jedno uruchomienie
 
     def status(self) -> str:
@@ -161,6 +166,8 @@ class Sniper:
         info = self.db.upsert(l, passes)
         if not passes:
             return 0
+        if getattr(sc, "needs_detail", False) and not l.detail_loaded:
+            return 0          # bez szczegółów nie wiemy nawet, czy to hatchback – spróbujemy przy kolejnym skanie
         row = self.db.get(l.key)
         if row["user_status"] == "ignore":
             return 0
@@ -184,11 +191,80 @@ class Sniper:
         if prev_tier is None and self.db.same_car_alerted(l):
             log.info("Duplikat z innego portalu: %s", l.url)
             return 0
+
+        # Dopiero przed wysłaniem alertu – dodatkowe sprawdzenia (kosztują zapytania)
+        self.enrich_for_alert(sc, l, row)
+        r = score_listing(l, self.model, self.s, price_drop=drop,
+                          vin_history=self.db.vin_history(l), current_year=datetime.now().year)
+        self.db.set_score(l.key, r.expected, r.score, r.tier)
+        self.db.save_data(l)
+        if r.tier not in ("perelka", "okazja") or not (TIER_RANK[r.tier] > TIER_RANK.get(prev_tier, 0) or cheaper):
+            return 0
+        pref = self.s.gearbox_pref
+        if pref and l.gearbox and l.gearbox != pref and r.tier != "perelka":
+            log.info("Pomijam okazję (%s, szukasz: %s): %s", l.gearbox, pref, l.url)
+            return 0
+        dist = l.extra.get("distance_km")
+        if self.s.max_distance_km and dist and dist > self.s.max_distance_km and r.tier != "perelka":
+            log.info("Pomijam okazję – za daleko (%s km): %s", dist, l.url)
+            return 0
         if self.tg.send_alert(l, r, price_drop=(prev_price - l.price_pln) if cheaper else drop):
             self.db.mark_alerted(l.key, r.tier, l.price_pln)
             log.info("ALERT %s %d/100 %s", r.tier, r.score, l.url)
             return 1
         return 0
+
+    def enrich_for_alert(self, sc, l, row):
+        """Handlarz?, odległość, ile wisi, jak szybko znikają podobne, czy wystawiane wcześniej."""
+        # handlarz udający osobę prywatną (OLX) – wynik pamiętany na 3 dni
+        if l.seller_type == "prywatny" and hasattr(sc, "seller_info") and l.extra.get("seller_id"):
+            key = f"seller:{sc.name}:{l.extra['seller_id']}"
+            info = self.db.kv_get(key)
+            if not info or time.time() - info.get("ts", 0) > 3 * 86400:
+                try:
+                    info = sc.seller_info(l) or {}
+                except Exception as e:  # noqa: BLE001
+                    log.debug("Sprzedawca %s: %s", l.url, e)
+                    info = {}
+                info["ts"] = time.time()
+                self.db.kv_set(key, info)
+            cars = info.get("car_ads", 0)
+            if info.get("is_business") or cars >= 3:
+                l.seller_type = "handlarz"
+                l.extra["seller_car_ads"] = cars or "wiele"
+        if self.geo:
+            l.extra["distance_km"] = self.geo.distance_km(l)
+        start = listed_since(l.created_at, row["first_seen"] if row else None)
+        l.extra["listed_days"] = (datetime.now(timezone.utc) - start).total_seconds() / 86400
+        sold = self.db.sold_days(l)
+        if len(sold) >= 3:
+            l.extra["sold_days_median"] = statistics.median(sold)
+        prev = self.db.previous_listing(l)
+        if prev:
+            pd = json.loads(prev["data"])
+            l.extra["previous"] = {
+                "source": SOURCES.get(prev["source"], prev["source"]).split(" ")[0],
+                "price": prev["price"], "mileage": prev["mileage"], "active": bool(prev["active"]),
+                "same_vin": bool(l.vin and prev["vin"] == l.vin),
+                "days_ago": (datetime.now(timezone.utc) - listed_since(pd.get("created_at"), prev["first_seen"])
+                             ).total_seconds() / 86400,
+            }
+
+    def check_listings_alive(self, limit: int = 30):
+        """Czy pasujące oferty dalej wiszą. Zniknięcie = sprzedane/usunięte → dane o czasie na rynku."""
+        by_name = {sc.name: sc for sc in self.scrapers}
+        gone = 0
+        for row in self.db.due_for_check(hours=6, limit=limit):
+            sc = by_name.get(row["source"])
+            if not sc:
+                continue
+            alive = check_alive(sc.http, row["url"])
+            if alive is None:
+                continue
+            self.db.mark_checked(row["key"], alive)
+            gone += not alive
+        if gone:
+            log.info("Zniknęło %d pasujących ofert (sprzedane/usunięte)", gone)
 
     def refresh_market(self):
         log.info("Pełny skan rynku do wyceny (także auta powyżej budżetu)")
@@ -234,6 +310,9 @@ class Sniper:
                 log.info("Skan zakończony, alertów: %d, pamięć: %d MB", n, memory_mb())
                 self.maybe_daily_report()
                 self.check_disk()
+                if time.time() - self.last_alive_check > 3600:
+                    self.check_listings_alive()
+                    self.last_alive_check = time.time()
             except Exception:  # noqa: BLE001
                 log.exception("Nieoczekiwany błąd w pętli")
             time.sleep(self.s.poll_interval + random.randint(-40, 60))

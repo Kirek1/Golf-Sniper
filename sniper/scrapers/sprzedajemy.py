@@ -83,6 +83,7 @@ def parse_detail(page: str, l: Listing) -> Listing:
 class SprzedajemyScraper:
     name = "sprzedajemy"
     sniper_pages, market_pages = 1, 1
+    needs_detail = True        # rocznik i przebieg są dopiero na stronie ogłoszenia
 
     def __init__(self, settings: Settings):
         self.s = settings
