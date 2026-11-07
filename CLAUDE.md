@@ -41,7 +41,7 @@ Rozmawiaj z użytkownikiem **po polsku**, prostym językiem – nie jest program
 - `needs_detail` (OtoMoto, Sprzedajemy): bez strony ogłoszenia nie ma alertu.
 - `GEARBOX=manual` (użytkownik szuka manuala): DSG tylko jako 💎, manual +2 pkt.
 - Zdjęcie w alercie (`sendPhoto`, podpis ≤1024 znaki, zapas: sam tekst); przycisk 📋 ze ściągą (`checklist.py`).
-- Odległość (`geo.py`): OLX ma lat/lon, reszta – Nominatim z cache w kv; `HOME_CITY`, `MAX_DISTANCE_KM` (dalej tylko 💎). **Użytkownik jeszcze nie podał miasta.**
+- Odległość (`geo.py`): OLX ma lat/lon, reszta – Nominatim z cache w kv; `HOME_CITY`, `MAX_DISTANCE_KM` (dalej tylko 💎). Użytkownik mieszka w woj. opolskim (okolice Opola) – `HOME_CITY` ustawia tylko w `.env` na VPS. **Nie wpisywać adresu do repo – repo jest publiczne.**
 - Handlarze na OLX: profil `/oferty/uzytkownik/<base62(user.id)>/` → `is_business` lub ≥3 aut = „handlarz” (cache 3 dni).
 - Czas na rynku: co godzinę `check_alive` dla do 30 kandydatów (404/przekierowanie/konkretne komunikaty) → `removed_at`; alert pokazuje „wisi X dni” i „podobne znikały po ~N dniach”. Ogólny zwrot „nie jest już dostępna” jest w kodzie każdej strony OLX – nie używać.
 - Ponowne wystawienia: `db.previous_listing` (VIN albo rocznik+moc+paliwo+skrzynia+przebieg±3k+miasto) → ♻️ w alercie; mniejszy przebieg przy tym samym VIN blokuje alert.
